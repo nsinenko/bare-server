@@ -32,6 +32,18 @@ The Docker build does this for you.
 The image is a `scratch` container holding just the binary — no shell, no CA
 store, no package manager, nothing to patch but the binary itself.
 
+Prebuilt images are published to GitHub's registry for `linux/amd64` and
+`linux/arm64` on every release:
+
+```sh
+docker pull ghcr.io/nsinenko/bare-server:latest     # or :0.1.0, :0.1
+```
+
+They are assembled from the same static binaries as the release tarballs, so the
+image and the tarball for a given architecture contain byte-identical binaries,
+and each image carries build provenance and an SBOM. To build it yourself
+instead — which compiles from source rather than assembling:
+
 ```sh
 docker build -t bare-server .
 ```
@@ -98,7 +110,7 @@ docker run -d --name bare-server --restart always \
   --user 1000:1000 \
   -v /etc/bare-server:/etc/bare-server:ro \
   -v /var/www:/var/www:ro \
-  bare-server /etc/bare-server/server.conf
+  ghcr.io/nsinenko/bare-server:latest /etc/bare-server/server.conf
 ```
 
 Why each flag:

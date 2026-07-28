@@ -162,3 +162,150 @@ jobs:
             --generate-notes \
             --verify-tag \
             dist/*.tar.gz dist/SHA256SUMS
+
+  # Publish the crate itself. Separate from `publish` because it needs a
+  # different (and mutually exclusive) permission set: `id-token: write` to mint
+  # the OIDC assertion, and no `contents: write` at all.
+  #
+  # Authentication is crates.io Trusted Publishing, not a stored API token. The
+  # workflow exchanges a short-lived GitHub OIDC identity for a scoped,
+  # ~30-minute registry token, so there is no long-lived credential in this
+  # repository for a compromised action or a repo admin to exfiltrate, and
+  # nothing to rotate. The trust relationship is configured once on crates.io
+  # (crate settings -> Trusted Publishing) and is pinned to this repository,
+  # this workflow file, and the `release` environment below.
+  crates-io:
+    name: Publish to crates.io
+    needs: [build]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') && !inputs.dry_run
+    # Gate the publish on a GitHub Environment so the trusted-publisher binding
+    # can be scoped to it, and so a protection rule can require a human click
+    # before anything reaches the registry.
+    environment: release
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+
+      # crates.io versions are permanent — they can be yanked but never deleted,
+      # and a re-publish of an existing version is a hard error. Re-running this
+      # workflow for a tag that is already on the registry is a normal thing to
+      # want (a failed binary build, a re-cut release), so treat "already there"
+      # as success rather than failing the run.
+      - name: Skip if this version is already published
+        id: check
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if curl -sf -H 'User-Agent: bare-server-release' \
+               "https://crates.io/api/v1/crates/bare-server/$version" > /dev/null; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "bare-server $version is already on crates.io; nothing to do."
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Refuse to publish a crate version that disagrees with the tag. The
+      # `check-version` job already compares the tag against Cargo.toml, but this
+      # job could be re-run on its own, and the registry write is the one step
+      # that cannot be taken back.
+      - name: Verify tag matches the crate version
+        if: steps.check.outputs.already == 'false'
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "tag $TAG does not match Cargo.toml version $VERSION" >&2
+            exit 1
+          fi
+
+      - name: Mint a short-lived registry token
+        if: steps.check.outputs.already == 'false'
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish
+        if: steps.check.outputs.already == 'false'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --locked
+
+  # Multi-arch container image on GitHub's registry. GitHub Packages has no Cargo
+  # registry, so the crate itself can only live on crates.io — but the image is
+  # worth publishing here, since the deployment guide otherwise asks every
+  # operator to build it themselves.
+  #
+  # This assembles the image from the binaries `build` already produced rather
+  # than recompiling: it keeps the container and the release tarball for a given
+  # architecture byte-identical, and avoids compiling ring's assembly for arm64
+  # under QEMU. See Dockerfile.release.
+  container:
+    name: Publish container image
+    needs: [build]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') && !inputs.dry_run
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # Lay the static musl binaries out the way buildx's TARGETARCH names them.
+      - name: Assemble the build context
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          for pair in "x86_64-unknown-linux-musl:amd64" "aarch64-unknown-linux-musl:arm64"; do
+            target="${pair%%:*}"; arch="${pair##*:}"
+            tarball="artifacts/bare-server-${TAG}-${target}.tar.gz"
+            [ -f "$tarball" ] || { echo "missing $tarball" >&2; exit 1; }
+            mkdir -p "bin/$arch"
+            tar -xzf "$tarball" -C "bin/$arch" --strip-components=1 \
+              "bare-server-${TAG}-${target}/bare-server"
+            chmod +x "bin/$arch/bare-server"
+          done
+          ls -l bin/*/bare-server
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # v1.2.3 -> :1.2.3, :1.2, :latest. No :1 — a 0.x major carries no
+      # compatibility promise, and pinning to it would be misleading.
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.release
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true

@@ -1,7 +1,10 @@
+<!-- Absolute URLs on purpose: `assets/` is excluded from the published crate
+     (see Cargo.toml), and a crate's README is immutable once a version is on
+     crates.io — a relative path would render as a broken image there forever. -->
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/lockup-reverse.svg">
-    <img src="assets/brand/lockup.svg" width="340" alt="bare server">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/nsinenko/bare-server/main/assets/brand/lockup-reverse.svg">
+    <img src="https://raw.githubusercontent.com/nsinenko/bare-server/main/assets/brand/lockup.svg" width="340" alt="bare server">
   </picture>
 </p>
 
@@ -11,7 +14,8 @@
 </p>
 
 <p align="center">
-  <a href="../../actions/workflows/ci.yml"><img src="../../actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/nsinenko/bare-server/actions/workflows/ci.yml"><img src="https://github.com/nsinenko/bare-server/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://crates.io/crates/bare-server"><img src="https://img.shields.io/crates/v/bare-server?color=C4451E" alt="crates.io"></a>
   <img src="https://img.shields.io/badge/license-MIT-0B0D0F" alt="MIT">
   <img src="https://img.shields.io/badge/rust-1.85%2B-C4451E" alt="Rust 1.85+">
 </p>
@@ -58,8 +62,8 @@ For a local run, `./gen-cert.sh` writes a self-signed pair and the end of
 
 | Guide | Covers |
 | --- | --- |
-| [Configuration](docs/CONFIGURATION.md) | Every directive, where each is allowed, redirect rules, canonical URLs, per-site overrides |
-| [Deployment](docs/DEPLOYMENT.md) | Docker and systemd, TLS key permissions and ACME renewal, hot reload, operating notes |
+| [Configuration](https://github.com/nsinenko/bare-server/blob/main/docs/CONFIGURATION.md) | Every directive, where each is allowed, redirect rules, canonical URLs, per-site overrides |
+| [Deployment](https://github.com/nsinenko/bare-server/blob/main/docs/DEPLOYMENT.md) | Docker and systemd, TLS key permissions and ACME renewal, hot reload, operating notes |
 | [Contributing](CONTRIBUTING.md) | Build, test, code style, release process |
 | [Security](SECURITY.md) | Reporting policy, scope, security-relevant design decisions |
 | [Brand](BRAND.md) | The mark, palette, type, naming and voice, and the CLI banner |
@@ -152,7 +156,7 @@ serving the previous one.
 
 ## Performance
 
-Reproduce all of this with [`bench/bench.sh`](bench/bench.sh), which builds the
+Reproduce all of this with [`bench/bench.sh`](https://github.com/nsinenko/bare-server/blob/main/bench/bench.sh), which builds the
 server, synthesises a fixed corpus, starts it, measures, and tears it down:
 
 ```sh

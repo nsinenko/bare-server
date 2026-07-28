@@ -1,0 +1,30 @@
+# ---- Release image: assemble, don't rebuild --------------------------------
+# The multi-arch image published to ghcr.io on a version tag.
+#
+# Deliberately NOT a copy of ./Dockerfile. That one compiles from source, which
+# is right for `docker build .` on a developer machine but wrong here for two
+# reasons: building for linux/arm64 on an amd64 runner means compiling Rust under
+# QEMU emulation (tens of minutes for ring's assembly), and — more importantly —
+# it would produce a *different* binary from the one in the release tarballs and
+# the SHA256SUMS beside them. Assembling the image from the already-built,
+# already-checksummed static binaries means the container and the tarball for a
+# given architecture are byte-identical.
+#
+# Expects a build context laid out per-arch, matching buildx's TARGETARCH:
+#   bin/amd64/bare-server   (from x86_64-unknown-linux-musl)
+#   bin/arm64/bare-server   (from aarch64-unknown-linux-musl)
+FROM scratch
+
+# Set by buildx per platform; there is no shell here to derive it.
+ARG TARGETARCH
+
+# No libc, no CA store (the server presents its own cert and never makes
+# outbound TLS), no shell. Just the static binary.
+COPY bin/${TARGETARCH}/bare-server /server
+
+EXPOSE 80 443
+# Numeric because scratch has no /etc/passwd.
+USER 1000:1000
+# ENTRYPOINT/CMD split so the config path can be overridden at run time.
+ENTRYPOINT ["/server"]
+CMD ["/etc/bare-server/server.conf"]
