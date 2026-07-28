@@ -1,0 +1,203 @@
+# bare-server example configuration.
+#
+# Copy this file, edit the site block at the bottom, and pass the path as the
+# server's only argument:
+#
+#     bare-server /etc/bare-server/server.conf
+#
+# The full reference is docs/CONFIGURATION.md. This file is a working starting
+# point: every commented-out directive shows its default, so deleting them all
+# changes nothing.
+#
+# FORMAT. A bare `key = value` line out here is server-wide. A `site` block
+# describes one virtual host and may override most of them for itself:
+#
+#     key = value                  <- server-wide, and the default for every site
+#
+#     site example.com, www.example.com {
+#         root = /var/www/example
+#         cert = /etc/bare-server/tls/example/cert.pem
+#         key  = /etc/bare-server/tls/example/key.pem
+#         csp  = default-src 'self'    <- overrides the server-wide default
+#         redirect /old -> /new
+#     }
+#
+# A `#` starts a comment at the start of a line or after whitespace, so a value
+# containing `#` (a CSP hash, a URL fragment) does not need escaping.
+#
+# File order does not matter: a top-level default applies to blocks written
+# above it. A directive in the wrong place is an error, never a silent no-op —
+# the (re)load is rejected and the previous config keeps serving.
+#
+# The config file, every document root and every certificate are re-read live,
+# about every 2 seconds. Editing this file does not need a restart.
+
+# ---- listeners --------------------------------------------------------------
+#
+# `listen` is required. `listen_http` is optional, but omitting it runs no
+# plain-HTTP listener at all: port 80 stops issuing HTTPS redirects and ACME
+# http-01 renewal will no longer work.
+
+listen = [::]:443
+listen_http = [::]:80
+
+
+# ---- cache & compression (optional) -----------------------------------------
+#
+# Server-wide here; any of these may be repeated inside a site block to override
+# it for that site alone. Sizes take an optional binary K/M/G suffix (1K = 1024);
+# times are seconds.
+#
+# Compression runs once at boot, serially, before the listeners bind — so these
+# trade startup time for bytes on the wire. On a small or single-core box,
+# lowering brotli_quality is the biggest win.
+#
+#   compression = on          # master switch; off = serve identity only
+#   brotli_quality = 11       # 0-11. 11 is ~1 MB/s; 4-5 is far faster, ~5% bigger
+#   gzip_level = 9            # 0-9
+#   min_compress_bytes = 64   # below this, headers outweigh any saving
+#   max_brotli_bytes = 8M     # above this a file gets no brotli variant
+#   max_gzip_bytes = 64M      # above this a file is cached identity-only
+#   max_file_size = 256M      # skip any single file larger than this
+#
+# Cache-Control policy. A fingerprinted URL — a filename ending in 8+ hex
+# digits, e.g. /style-0667c2b357.css — names one exact set of bytes, so it is
+# safe to pin and mark immutable. Everything else revalidates, which the ETag
+# makes cheap. Raising cache_max_age above 0 pins un-hashed URLs too; only do
+# that if you can tolerate stale content until it expires.
+#
+#   cache_max_age = 0              # max-age for un-fingerprinted URLs
+#   immutable_max_age = 31536000   # max-age for fingerprinted URLs
+#
+# SERVER-ONLY (rejected inside a site block, because it is one pool shared by
+# every site). A reload builds the replacement cache before dropping the old
+# one, so both are resident at peak: size the host for 2x this.
+#
+#   max_total_bytes = 2G
+
+
+# ---- security response headers (optional) -----------------------------------
+#
+# These go out on every response, including errors and redirects. Also per-site
+# overridable — a site with its own CSP is the common case.
+#
+# X-Content-Type-Options, X-Frame-Options, Referrer-Policy and Permissions-Policy
+# are always sent and are not configurable.
+#
+#   hsts_max_age = 63072000         # Strict-Transport-Security max-age; 0 disables the header
+#   hsts_include_subdomains = on    # add ; includeSubDomains
+#   hsts_preload = on               # add ; preload — a slow-to-reverse commitment,
+#                                   # see https://hstspreload.org before enabling
+#   csp = default-src 'self'        # Content-Security-Policy; empty (default) = no header
+
+
+# ---- connection limits (optional, server-only) ------------------------------
+#
+#   max_conns_per_ip = 64     # max concurrent connections from one source IP.
+#                             # 0 = unlimited; set that behind a shared-IP proxy.
+#   max_response_secs = 0     # absolute cap (s) on a single in-flight response body.
+#                             # OFF by default: it truncates a legitimately slow large
+#                             # download. Slow-read slot pinning is already bounded by
+#                             # a minimum transfer rate (1 KiB / 30s); this is an extra
+#                             # hard ceiling for hosts that serve only small files.
+#
+# Both are re-read on reload and applied to the live listeners, so they can be
+# tightened during an attack without restarting.
+
+
+# ---- content storage backend (optional, server-only) ------------------------
+#
+# storage = memory (the default) loads every file into RAM at boot as a
+# precomputed response — the fastest path, but resident memory scales with the
+# site.
+#
+# storage = disk holds only a small index in RAM (path, mime, ETag, header) and
+# snapshots each body — plus its gzip/brotli sidecars — into disk_cache,
+# streaming from there at serve time so the OS page cache does the buffering.
+# RAM then stays roughly constant regardless of site size, at the cost of
+# per-request file I/O and ~1x the site's size on disk.
+#
+#   storage = memory
+#   disk_cache = /var/cache/bare-server   # REQUIRED for disk. Must be real disk,
+#                                         # not tmpfs, and writable by the server user.
+
+
+# ---- sites ------------------------------------------------------------------
+#
+#   site <host[, host2, ...]> {
+#       root           = <dir>   # optional: omit for a host that only redirects
+#       cert           = <file>  # required — TLS terminates here even with no content
+#       key            = <file>  # required
+#       force_ssl      = on      # default; `off` serves this site's content over :80 too
+#       canonical_urls = off     # `on` 301s the .html spellings onto /path/
+#       redirect <pattern> -> <target>
+#   }
+#
+# Several comma-separated names share one document root, one cache, one rule set
+# and one certificate — which must cover every name listed (SANs), or the
+# (re)load is rejected.
+#
+# HTTP -> HTTPS redirect is ON by default: the plain-HTTP listener answers with a
+# 301 to https:// rather than serving content over :80. The ACME http-01 prefix
+# (/.well-known/acme-challenge/) stays reachable over plain HTTP either way — and
+# is exempt from the redirect rules below as well — so renewal keeps working.
+#
+# REDIRECT RULES. Every redirect is a 301 Moved Permanently; there is no status
+# to configure. Rules are checked before the site's content, so a rule can shadow
+# a file that still exists. Three pattern forms:
+#
+#   redirect /old      -> /new                   # exact path
+#   redirect /docs/*   -> /help/$1               # trailing /prefix/*, $1 = the remainder
+#   redirect *         -> https://example.com$0  # whole host, $0 = the whole path
+#
+# Most specific wins regardless of the order written: exact, then the longest
+# matching prefix, then the catch-all. A target is either a path starting with
+# `/` (this host's scheme and authority are filled in) or an absolute http(s)
+# URL (emitted verbatim). `$$` is a literal `$`. The query string carries over
+# unless the target already has one. Patterns match the RAW, still-percent-
+# encoded request path, so write them exactly as a client sends them.
+#
+# CANONICAL URLS. A site built from directory-index files answers the same
+# document at /about/, /about/index.html and (if it predates clean URLs) at
+# /about.html. `canonical_urls = on` folds the last two onto the first:
+#
+#   /index.html        -> /
+#   /<path>/index.html -> /<path>/
+#   /<path>.html       -> /<path>/
+#   /myindex.html      -> /myindex/    (only a whole "index" segment counts)
+#
+# It runs AFTER the rules above, so a page that actually moved still reaches its
+# new home in one hop, and the result never ends in .html so it can never match
+# again. Off by default because it changes what a URL does.
+
+site example.com {
+    root = /var/www/example.com
+    cert = /etc/bare-server/tls/example.com/cert.pem
+    key  = /etc/bare-server/tls/example.com/key.pem
+
+    # canonical_urls = on
+    # csp = default-src 'self'
+    # redirect /old -> /new
+}
+
+# A redirect-only host (www -> apex) is a site block with no root. It still needs
+# a certificate: the handshake has to complete before the 301 can be sent. Give
+# it a `root` pointing at an ACME webroot if it should renew its own certificate
+# over http-01.
+#
+#   site www.example.com {
+#       cert = /etc/bare-server/tls/example.com/cert.pem
+#       key  = /etc/bare-server/tls/example.com/key.pem
+#       redirect * -> https://example.com$0
+#   }
+
+# For a local test run, use ./gen-cert.sh and an unprivileged port instead:
+#
+#   listen = 127.0.0.1:8443
+#   listen_http = 127.0.0.1:8080
+#
+#   site localhost {
+#       root = ./www
+#       cert = ./tls/cert.pem
+#       key  = ./tls/key.pem
+#   }

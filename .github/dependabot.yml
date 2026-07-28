@@ -1,0 +1,24 @@
+version: 2
+
+# SECURITY.md declares "vulnerabilities in dependencies that are already public
+# and fixed upstream" out of scope, on the assumption that someone notices and
+# bumps Cargo.lock. Nothing did: every build is `--locked`, so a vulnerable pin
+# would sit indefinitely until a human went looking. These two ecosystems are the
+# whole supply chain — the crate graph and the actions the release runs.
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    # The lockfile is the thing that needs moving; this crate publishes no
+    # semver range that a caller depends on.
+    versioning-strategy: lockfile-only
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [dependencies]

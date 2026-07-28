@@ -1,0 +1,179 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# CI only builds and tests; it never writes to the repository. Stating that here
+# pins the posture against a change to the repository- or org-level default,
+# rather than relying on that default staying read-only.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Run the actual test suite everywhere it can run natively. The integration
+  # tests bind real sockets and speak real TLS, so this is the job that proves
+  # the server works, not just that it compiles.
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # No Intel macOS runner here: the `macos-13` image is retired and its
+        # jobs simply never get scheduled. x86_64-apple-darwin is still
+        # compile-checked by the build-apple job below.
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --all-targets
+      - run: cargo test --locked
+      - run: cargo clippy --locked --all-targets
+
+  # Compile for every target we claim to support. Windows is deliberately
+  # absent: the ACME token read uses std::os::unix (O_NOFOLLOW, st_nlink)
+  # without a cfg gate, so the crate is Unix-only by construction.
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            static: false
+          - target: x86_64-unknown-linux-musl
+            static: true
+          - target: aarch64-unknown-linux-gnu
+            static: false
+          - target: aarch64-unknown-linux-musl
+            static: true
+          - target: armv7-unknown-linux-musleabihf
+            static: true
+          - target: x86_64-unknown-freebsd
+            static: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      # `cross` runs each target in a container with the right linker and C
+      # toolchain, which ring's build script needs when cross-compiling.
+      # Installed prebuilt rather than `cargo install`, which would rebuild it
+      # from source on every one of these matrix legs.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+      - name: Build
+        run: cross build --release --locked --target ${{ matrix.target }}
+      - name: Verify the binary is statically linked
+        if: matrix.static
+        run: |
+          bin="target/${{ matrix.target }}/release/bare-server"
+          file "$bin"
+          # A musl static build shows up as either "statically linked" or
+          # "static-pie linked" depending on target and toolchain; only a
+          # dynamically linked one names an interpreter.
+          file "$bin" | grep -qE 'statically linked|static-pie linked' \
+            || { echo "expected a static binary, got:"; file "$bin"; exit 1; }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bare-server-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/bare-server
+          if-no-files-found: error
+
+  # Apple targets cannot be cross-compiled from Linux, so they get their own
+  # native job.
+  build-apple:
+    name: Build ${{ matrix.target }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-apple-darwin, aarch64-apple-darwin]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+
+  # The declared rust-version is a promise; check it holds.
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - id: msrv
+        run: |
+          v=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --all-targets
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t bare-server .
+      # The image is FROM scratch, so a binary that is not fully static would
+      # not run at all. Prove it does.
+      - name: Run the image against a generated config
+        run: |
+          ./gen-cert.sh
+          # The image runs as uid 1000 while the runner is uid 1001, so the
+          # 0600 key openssl just wrote would be unreadable inside the
+          # container. Safe here: a throwaway self-signed localhost cert.
+          chmod 644 tls/key.pem tls/cert.pem
+          mkdir -p /tmp/conf
+          cat > /tmp/conf/server.conf <<'EOF'
+          listen = 127.0.0.1:8443
+          site localhost {
+              root = /srv/www
+              cert = /srv/tls/cert.pem
+              key  = /srv/tls/key.pem
+          }
+          EOF
+          docker run -d --name bs --network host \
+            -v /tmp/conf:/srv/conf:ro \
+            -v "$PWD/www:/srv/www:ro" \
+            -v "$PWD/tls:/srv/tls:ro" \
+            bare-server /srv/conf/server.conf
+          for _ in $(seq 1 50); do
+            curl -sk --ipv4 -o /dev/null https://localhost:8443/ && break
+            sleep 0.2
+          done
+          # The server selects a site by SNI, so this must use the hostname:
+          # an IP literal sends no SNI and the handshake is refused.
+          code=$(curl -sk --ipv4 -o /dev/null -w '%{http_code}' https://localhost:8443/)
+          docker logs bs
+          docker rm -f bs
+          [ "$code" = 200 ] || { echo "expected 200, got $code"; exit 1; }
+
+  # The benchmark script is part of the repo, so it must not rot.
+  bench:
+    name: Benchmark script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # No load generator installed, so only the deterministic phases run:
+      # build, corpus, startup and the compression ratios.
+      - run: ./bench/bench.sh --no-load

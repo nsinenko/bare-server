@@ -1,0 +1,23 @@
+# Rust build output
+/target/
+
+# macOS junk
+.DS_Store
+
+# Local TLS material — self-signed test certs from gen-cert.sh.
+# Never commit private keys.
+/tls/
+/tls-ec/
+*.pem
+*.key
+
+# A real config, copied from server.conf.example. It names your hosts and the
+# paths to your keys, so it stays local; only the example is tracked.
+/server.conf
+
+# Test content served from the placeholder document root. Only the placeholder
+# page and the favicon it references are tracked — site content does not belong
+# in this repository.
+/www/*
+!/www/index.html
+!/www/favicon.svg

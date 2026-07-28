@@ -1,0 +1,164 @@
+name: Release
+
+# Nothing here runs on an ordinary push. A release happens only when a version
+# tag is pushed, or when the workflow is dispatched manually:
+#
+#   git tag -a v0.1.0 -m 'v0.1.0' && git push origin v0.1.0
+#
+# A manual dispatch builds and uploads the artifacts but stops short of
+# publishing, so the whole pipeline can be rehearsed without cutting a release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build the archives but do not publish a release
+        type: boolean
+        default: true
+
+# Least privilege by default. Only `publish` creates the release, so only that
+# job is granted write access; the build matrix runs third-party actions and has
+# no reason to hold a token that can push to the repository.
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Refuse to publish a tag that disagrees with Cargo.toml. Catching it here
+  # beats discovering it in a published release that cannot be edited.
+  check-version:
+    name: Check tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          echo "tag=$tag crate=$crate"
+          [ "$tag" = "$crate" ] || {
+            echo "::error::tag v$tag does not match Cargo.toml version $crate"
+            exit 1
+          }
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: [check-version]
+    # `needs` on a skipped job would skip this one too, so allow the
+    # check to be skipped (manual dispatch) but never to have failed.
+    if: always() && needs.check-version.result != 'failure'
+    runs-on: ${{ matrix.os }}
+    # The build matrix only produces artifacts; `publish` is what writes.
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+          - target: armv7-unknown-linux-musleabihf
+            os: ubuntu-latest
+            cross: true
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: true
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: true
+          - target: x86_64-unknown-freebsd
+            os: ubuntu-latest
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            cross: false
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            cross: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - uses: taiki-e/install-action@v2
+        if: matrix.cross
+        with:
+          tool: cross
+
+      - name: Build
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --locked --target ${{ matrix.target }}
+          else
+            cargo build --release --locked --target ${{ matrix.target }}
+          fi
+
+      # Ship the binary with the things someone needs to actually run it: the
+      # licence, the README, an annotated config to copy, and the systemd unit.
+      - name: Package
+        id: package
+        run: |
+          name="bare-server-${GITHUB_REF_NAME:-dev}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/bare-server" "dist/$name/"
+          cp README.md LICENSE server.conf.example "dist/$name/"
+          cp deploy/bare-server.service "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          # Checksums are generated per-job and combined later: the runner that
+          # built a binary is the only one that can vouch for it.
+          ( cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256" )
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [build]
+    runs-on: ubuntu-latest
+    # Only a real tag publishes. A manual dry run stops after the build above.
+    if: startsWith(github.ref, 'refs/tags/v') && !inputs.dry_run
+    # The only job that writes: it creates the GitHub Release.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Collect checksums
+        run: |
+          cd dist
+          cat *.sha256 > SHA256SUMS
+          rm -f *.sha256
+          ls -l
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag \
+            dist/*.tar.gz dist/SHA256SUMS

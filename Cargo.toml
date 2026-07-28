@@ -1,0 +1,55 @@
+[package]
+name = "bare-server"
+version = "0.1.0"
+edition = "2021"
+description = "A minimal static-file web server with built-in TLS termination, in a single static binary"
+authors = ["Nikita Sinenko <nikita.sinenko@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/nsinenko/bare-server"
+homepage = "https://github.com/nsinenko/bare-server"
+documentation = "https://github.com/nsinenko/bare-server/blob/main/docs/CONFIGURATION.md"
+keywords = ["http", "server", "static", "tls", "rustls"]
+categories = ["network-programming", "web-programming::http-server"]
+# The ACME token read uses std::os::unix directly (O_NOFOLLOW, st_nlink) and is
+# not cfg-gated, so this does not build on Windows. Linux and the BSDs/macOS are
+# the supported targets; CI builds all of them.
+exclude = ["/bench", "/deploy", "/www", "/.github", "/docs", "/assets"]
+# Verified by `cargo +1.85 check --locked --all-targets`, and enforced by the
+# `msrv` CI job so it cannot drift unnoticed. The floor comes from the locked
+# dependency graph, not from this crate's own source: Cargo.lock is v4 (needs
+# 1.78+) and a transitive `zeroize` requires edition 2024 (needs 1.85+).
+rust-version = "1.85"
+
+[dependencies]
+# rustls with the `ring` crypto provider: pure-Rust TLS, no OpenSSL, links
+# cleanly as a fully static musl binary. tls12 enables TLS 1.2 alongside 1.3.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pemfile = "2"
+# Precompute compressed variants at boot. Both are pure-Rust (flate2 uses the
+# miniz_oxide backend), so the static musl build stays free of C dependencies.
+flate2 = "1"
+brotli = "7"
+# Declarations only (no compiled C), already in the tree transitively via ring.
+# Used for the O_NOFOLLOW flag on the live ACME token read (see serve_acme_token).
+libc = "0.2"
+
+[profile.release]
+# "s" over 3: the request hot path is a hashmap lookup, a short header scan and
+# one write_all of a precomputed buffer — the real CPU work is inside ring's
+# hand-written assembly, which opt-level does not touch. Measured on a static
+# musl build: 2,560,192 -> 2,232,512 bytes (-12.8%).
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+# NOTE: panic defaults to unwind on purpose — a panic in one connection thread
+# stays contained to that thread instead of aborting the whole server.
+
+# Boot-time compression is the one place opt-level actually buys throughput, and
+# it runs for every file on startup and on every hot reload. Keep it at 3.
+[profile.release.package.brotli]
+opt-level = 3
+
+[profile.release.package.miniz_oxide]
+opt-level = 3

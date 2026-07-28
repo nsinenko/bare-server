@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 376 64" width="376" height="64" fill="none" role="img" aria-label="bare server">
+  <title>bare server</title>
+  <path d="M17 9H8V55H17M47 9H56V55H47" stroke="#0B0D0F" stroke-width="5" stroke-linecap="square"/>
+  <rect x="24" y="23" width="9" height="18" fill="#0B0D0F"/>
+  <rect x="35" y="23" width="15" height="18" fill="#0B0D0F"/>
+  <!-- Gap is 0.4x the 64-unit mark height. "bare server" has no descenders, so
+       its ink box runs from the baseline to the ascender of 'b' (0.7598em, the
+       same in Menlo and DejaVu Sans Mono); centring that box on the mark's own
+       centre at y=32 puts the baseline at 32 + 0.7598*46/2 = 49.5.
+       textLength pins the -0.035em tracking regardless of which fallback
+       monospace the viewer actually resolves. -->
+  <text x="90" y="49.5" fill="#0B0D0F"
+        font-family="'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace"
+        font-size="46" font-weight="500"
+        textLength="286" lengthAdjust="spacing">bare server</text>
+</svg>

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<title>bare server test page</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1rem; line-height: 1.6; }
+  code { background: #f4f4f4; padding: .1rem .3rem; border-radius: 3px; }
+</style>
+</head>
+<body>
+<h1>bare server</h1>
+<p>This is a placeholder document root, used for local testing and
+benchmarking. Point a site's <code>root</code> at your own content to serve
+something real.</p>
+<p>This page is deliberately longer than 64 bytes, so the server builds gzip and
+brotli variants for it at boot. That makes it enough on its own to exercise
+compression negotiation, <code>ETag</code>/<code>304</code> revalidation and
+<code>Cache-Control</code>.</p>
+<ul>
+  <li>Generate a local certificate: <code>./gen-cert.sh</code></li>
+  <li>Serve it: use the local test block at the end of <code>server.conf.example</code></li>
+  <li>Check headers: <code>curl -skI https://localhost:8443/</code></li>
+  <li>Check compression: <code>curl -sk -H 'Accept-Encoding: br' -o /dev/null -D- https://localhost:8443/</code></li>
+</ul>
+</body>
+</html>
