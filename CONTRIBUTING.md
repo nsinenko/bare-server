@@ -10,28 +10,27 @@ bare server serves static files over HTTP/1.1 and TLS, and does nothing else.
 The absence of CGI, reverse proxying, directory listings, HTTP/2, request
 logging, and `Range` support is a design decision, not a backlog.
 
-Before writing a patch that adds a feature, please open an issue describing the
-problem it solves. A change that adds a dependency, a background thread, or
-per-request allocation to the hot path needs a strong justification — those are
-the properties the whole design is built around.
+Before you write a patch that adds a feature, please open an issue that describes
+the problem it solves. A change that adds a dependency, a background thread, or
+allocation per request to the hot path needs a strong justification. Those are the
+properties the whole design is built around.
 
 Good contributions, in rough order of usefulness:
 
 - Bug reports with a minimal reproducer (a config plus a `curl` invocation).
 - Fixes for spec-conformance gaps in the HTTP/1.1 parser.
-- Hardening: anything that lets a client consume more resources than the caps
-  intend.
+- Anything that lets a client consume more resources than the caps intend.
 - Documentation fixes, especially in [`docs/`](docs/) and
   [`server.conf.example`](server.conf.example).
 - Portability fixes for platforms other than Linux.
 
-## Building and testing
+## Build and test
 
 Requires Rust 1.85 or newer (`rust-version` in `Cargo.toml`, enforced by CI).
 
 The crate is **Unix-only**: `read_token_file` uses `std::os::unix` for
 `O_NOFOLLOW` and `st_nlink` without a `cfg` gate, so it does not build on
-Windows. A patch adding Windows support would have to solve that safely, not
+Windows. A patch that adds Windows support would have to solve that safely, not
 just gate it away.
 
 ```sh
@@ -41,26 +40,26 @@ cargo test --locked
 
 The integration tests in [`tests/integration.rs`](tests/integration.rs) start
 real listeners on ephemeral ports and speak real TLS against them, so they
-dominate the wall-clock time; the unit tests run in well under a second.
+dominate the wall-clock time. The unit tests run in well under a second.
 
 `openssl` and `curl` must be on `PATH`. The suite generates the certificates it
-needs — the RSA/EC fixtures land in `target/test-certs/` and each integration
-server gets a fresh self-signed pair — so a clean checkout tests green with no
-setup. Nothing reads a certificate from the source tree, and no key material is
+needs, so a clean checkout tests green with no setup: the RSA and EC fixtures land
+in `target/test-certs/`, and each integration server gets a fresh self-signed
+pair. Nothing reads a certificate from the source tree, and no key material is
 committed.
 
 ```sh
-cargo clippy --all-targets --locked
+cargo clippy --all-targets --locked -- -D warnings
 ```
 
-**Every patch must leave `cargo test --locked` passing.** If you change behavior,
-the patch should include the test that would have caught the old behavior.
+**`cargo test --locked` must pass after every patch.** If you change behavior, the
+patch should include the test that would have caught the old behavior.
 
-There are no dev-dependencies, and adding one needs a good reason — the test
-suite deliberately builds its own helpers (see
-[`src/testutil.rs`](src/testutil.rs)) rather than pulling in crates.
+There are no dev-dependencies, and a new one needs a good reason. The test suite
+deliberately builds its own helpers (see [`src/testutil.rs`](src/testutil.rs))
+rather than pulls in crates.
 
-### Benchmarking
+### Benchmarks
 
 [`bench/bench.sh`](bench/bench.sh) builds the server, generates a fixed corpus,
 runs it, and measures. The compression and footprint phases are deterministic
@@ -71,22 +70,22 @@ and reproduce anywhere; the throughput phases depend on the machine and need
 ./bench/bench.sh --quick
 ```
 
-If a patch is meant to make something faster, include before/after output from
-the same machine in the same sitting — figures from different hosts are not
+If a patch is meant to make something faster, include before and after output
+from the same machine in the same sitting. Figures from different hosts are not
 comparable.
 
-One trap worth knowing when writing any client against this server: it selects a
-site by **SNI**, so a client connecting to `127.0.0.1` sends no SNI and gets its
-handshake refused with an `access_denied` alert. Use a hostname.
+One trap to know about before you write any client against this server: it selects
+a site by **SNI**, so a client that connects to `127.0.0.1` sends no SNI and gets
+its handshake refused with an `access_denied` alert. Use a hostname.
 
 ### Where tests live
 
-- **Unit tests** sit in `#[cfg(test)] mod tests` at the bottom of the module they
-  cover. Larger modules split them into several named modules
+- Unit tests sit in `#[cfg(test)] mod tests` at the bottom of the module they
+  cover. A larger module splits them into several named modules
   (`signature_tests`, `policy_tests`, `disk_tests`) rather than one giant block.
-- **Integration tests** live in `tests/integration.rs` and drive the real server
-  over a real socket. Put a test here when it needs the whole stack — TLS,
-  listeners, hot reload — and in a unit test otherwise.
+- Integration tests live in `tests/integration.rs` and drive the real server over
+  a real socket. Put a test here when it needs the whole stack, meaning TLS, the
+  listeners and hot reload. Put it in a unit test otherwise.
 - Test names are full sentences describing the behavior:
   `plain_http_redirects_to_https_with_force_ssl`, not `test_redirect_2`.
 
@@ -94,12 +93,12 @@ handshake refused with an `access_denied` alert. Use a hostname.
 
 The dependency list is short on purpose, and every entry earns its place:
 
-- `rustls` + `ring` — TLS without OpenSSL, so the binary links as fully static
+- `rustls` and `ring`: TLS without OpenSSL, so the binary links as fully static
   musl.
-- `rustls-pemfile` — certificate and key loading.
-- `flate2` (miniz_oxide backend) and `brotli` — pure-Rust compression, so the
+- `rustls-pemfile`: it reads the certificate and the key.
+- `flate2` (miniz_oxide backend) and `brotli`: pure-Rust compression, so the
   static build stays free of C dependencies.
-- `libc` — declarations only, for the `O_NOFOLLOW` flag on the live ACME token
+- `libc`: declarations only, for the `O_NOFOLLOW` flag on the live ACME token
   read.
 
 `Cargo.lock` is committed and builds use `--locked`. If a patch genuinely needs
@@ -107,10 +106,9 @@ a new dependency, say why in the pull request.
 
 ## Code style
 
-The code is not `rustfmt`-normalized, and running `cargo fmt` across the tree
-will produce a large unrelated diff — please don't. Match the surrounding style
-instead: roughly 100–120 columns, and the existing alignment of trailing
-comments.
+The code is not `rustfmt`-normalized, and `cargo fmt` across the tree produces a
+large unrelated diff. Please don't. Match the surrounding style instead: roughly
+100 to 120 columns, and the existing alignment of trailing comments.
 
 The one convention that matters more than formatting: **comments explain why,
 not what.** This codebase is dense with reasoning about limits, timeouts, and
@@ -132,9 +130,9 @@ Other conventions:
 - Prefer returning `Result<_, String>` with a message that names the offending
   config line over panicking. The parser is a pure `&str -> Result<Config, _>`
   precisely so it stays trivial to test.
-- Avoid `unwrap()` outside tests. Lock poisoning is handled with
-  `unwrap_or_else(PoisonError::into_inner)` — a panicked connection thread must
-  not take the server down with it.
+- Avoid `unwrap()` outside tests. A poisoned lock is handled with
+  `unwrap_or_else(PoisonError::into_inner)`, because a panicked connection thread
+  must not take the server down with it.
 - Panics stay contained per connection: the release profile deliberately keeps
   `panic = unwind`.
 
@@ -144,7 +142,7 @@ Anything touching the request parser, the ACME token read, path resolution,
 redirect target validation, or the connection caps is security-sensitive. Please
 call that out in the pull request and describe what an attacker could attempt.
 
-If you have found a vulnerability, **do not open a public issue** — see
+If you found a vulnerability, **do not open a public issue**. See
 [SECURITY.md](SECURITY.md).
 
 ## Pull requests
@@ -160,23 +158,24 @@ License that covers the project.
 
 ## Releases
 
-Releases are cut by pushing a version tag; nothing publishes on an ordinary
-push.
+A version tag cuts a release. Nothing publishes on an ordinary push.
 
-1. Bump `version` in `Cargo.toml`, and commit (`Cargo.lock` updates with it).
-2. Tag and push:
+1. Move the `Unreleased` entries of [`CHANGELOG.md`](CHANGELOG.md) under a new
+   version heading, with the release date and the compare links.
+2. Bump `version` in `Cargo.toml`, and commit (`Cargo.lock` updates with it).
+3. Tag and push:
 
    ```sh
-   git tag -a v0.1.0 -m 'v0.1.0'
-   git push origin v0.1.0
+   git tag -a v0.2.0 -m 'v0.2.0'
+   git push origin v0.2.0
    ```
 
-[`.github/workflows/release.yml`](.github/workflows/release.yml) then verifies
-the tag matches `Cargo.toml` — a mismatch fails before anything is published —
-builds every supported target, and publishes a GitHub Release with one
-`.tar.gz` per target plus a `SHA256SUMS` file. Each archive carries the binary,
+[`.github/workflows/release.yml`](.github/workflows/release.yml) then checks that
+the tag matches `Cargo.toml`, and a mismatch fails before anything publishes. It
+builds every supported target and publishes a GitHub Release with one `.tar.gz`
+per target plus a `SHA256SUMS` file. Each archive carries the binary,
 `README.md`, `LICENSE`, `server.conf.example`, and the systemd unit.
 
-To rehearse without releasing, run the workflow manually from the Actions tab
-with **dry run** left checked: it builds and uploads the archives as workflow
-artifacts and skips publishing entirely.
+To rehearse without a release, run the workflow by hand from the Actions tab and
+leave **dry run** checked. It builds and uploads the archives as workflow
+artifacts, and publishes nothing.

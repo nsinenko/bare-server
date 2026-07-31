@@ -1,7 +1,7 @@
 //! The boot banner.
 //!
 //! A courtesy for a human at a terminal, not output. It goes to stderr exactly
-//! once, only when stderr is a TTY, and never under `--quiet` — a server that
+//! once, only when stderr is a TTY, and never under `--quiet`: a server that
 //! deliberately has no request logging should not be the noisiest thing in a
 //! systemd journal. Under systemd or Docker, stderr is a pipe, so nothing here
 //! ever reaches the journal.
@@ -30,7 +30,7 @@ const BLOCK: char = '\u{2588}';
 /// header) in ember, the second (the body) left at the terminal's own
 /// foreground so it stays legible on a light or a dark profile alike.
 ///
-/// Works on runs rather than byte offsets — every glyph here is multi-byte, so
+/// Works on runs rather than byte offsets, because every glyph here is multi-byte, so
 /// a column index is not a byte index.
 fn tint(row: &str) -> String {
     let mut out = String::new();
@@ -59,7 +59,7 @@ fn tint(row: &str) -> String {
 
 /// The ember accent as an ANSI 256-colour code. One accent, on one element.
 const EMBER: &str = "\x1b[38;5;166m";
-/// The brackets are structure, not content — the palette's muted tone (#8B857A)
+/// The brackets are structure, not content, so the palette's muted tone (#8B857A)
 /// is for exactly this, and dropping them back lets the blocks read as the
 /// subject. Not an accent, so this does not spend the one-accent budget.
 const MUTED: &str = "\x1b[38;5;245m";
@@ -80,7 +80,7 @@ fn locale_from_env() -> Option<String> {
 
 /// The side text. `storage` and the brotli quality are the two settings that
 /// change what the process actually does at boot, so they are read from the
-/// running config rather than hardcoded — the banner should not claim a
+/// running config rather than hardcoded, because the banner should not claim a
 /// configuration the server is not in.
 fn sides(storage: Storage, brotli_quality: u32, compression: bool) -> [String; 5] {
     let codec = if compression {
@@ -132,7 +132,7 @@ pub(crate) fn print(quiet: bool, storage: Storage, brotli_quality: u32, compress
     if quiet || !err.is_terminal() {
         return;
     }
-    // NO_COLOR is honoured at any value, including empty — see no-color.org.
+    // NO_COLOR is honoured at any value, including empty. See no-color.org.
     let colour = std::env::var_os("NO_COLOR").is_none();
     let text = render(locale_is_utf8(locale_from_env()), colour, storage, brotli_quality, compression);
     let mut w = err.lock();

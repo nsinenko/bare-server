@@ -4,7 +4,7 @@ version: 2
 # and fixed upstream" out of scope, on the assumption that someone notices and
 # bumps Cargo.lock. Nothing did: every build is `--locked`, so a vulnerable pin
 # would sit indefinitely until a human went looking. These two ecosystems are the
-# whole supply chain — the crate graph and the actions the release runs.
+# whole supply chain: the crate graph and the actions the release runs.
 updates:
   - package-ecosystem: cargo
     directory: /

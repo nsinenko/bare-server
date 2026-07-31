@@ -5,11 +5,11 @@ Wants=network-online.target
 
 # Every startup error is fatal (bad config, unreadable cert, bind failure), and
 # the default budget of 5 starts in a 10s window trips almost immediately at
-# RestartSec=5 — a transient fault (root not mounted yet, listen IP not assigned)
+# RestartSec=5. A transient fault (root not mounted yet, listen IP not assigned)
 # would leave the unit permanently failed. StartLimitIntervalSec is the *window*
 # systemd counts starts over, not a retry duration: to actually keep retrying for
 # ~5 minutes the burst must span it. At RestartSec=5 a start happens every ~5s, so
-# 60 starts fill a 300s window — i.e. it retries for ~5 minutes before giving up.
+# 60 starts fill a 300s window, so it retries for ~5 minutes before giving up.
 StartLimitIntervalSec=300
 StartLimitBurst=60
 
@@ -23,7 +23,7 @@ RestartSec=5
 
 # The concurrency caps in main.rs (MAX_CONNS 1024 + MAX_CONNS_HTTP 256) allow
 # ~1280 sockets held for up to CONN_MAX_SECS, above systemd's 1024 default soft
-# limit — accept() would fail with EMFILE before the anti-DoS cap ever engaged.
+# limit. accept() would fail with EMFILE before the anti-DoS cap ever engaged.
 # Headroom here covers the listeners plus the fds the reload path opens.
 LimitNOFILE=16384
 

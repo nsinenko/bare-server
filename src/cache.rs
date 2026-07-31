@@ -1,7 +1,7 @@
 //! The in-memory content cache and the change-detection that feeds the
 //! hot-reload watcher.
 //!
-//! At boot every document root is walked once and each file is baked into a
+//! At boot every document root is walked once and each file becomes a
 //! set of ready-to-write responses (identity, and gzip/brotli for compressible
 //! types). Serving a request is then a single `write_all` of a precomputed
 //! buffer. The signature helpers (`file_signature`, `tree_signature`,
@@ -21,16 +21,20 @@ use crate::mime::mime_for;
 
 /// The server-level cache/compression settings resolved once per cache build:
 /// the raw `Tuning` plus the two Cache-Control header values derived from it, so
-/// those strings are formatted once rather than per file. Cheap to share — each
+/// those strings are formatted once rather than per file. Cheap to share: each
 /// `Cached` holds an `Arc` clone of whichever value applies.
 pub(crate) struct Policy {
     pub(crate) t: Tuning,
     cc_immutable: Arc<str>,
     cc_revalidate: Arc<str>,
-    /// The security-header block baked into every cached response, rendered once
+    /// The security-header block inside every cached response, rendered once
     /// from the config's `HeaderConfig`. Shared (Arc) with `Vhosts` so the
     /// on-the-fly error/redirect paths emit exactly the same headers.
     pub(crate) security_headers: Arc<str>,
+    /// This site's precomputed 4xx/5xx responses, carrying the same
+    /// `security_headers` block above. Built here rather than per request, so an
+    /// error costs one `write_all` like a cache hit does.
+    pub(crate) errors: ErrorPages,
     /// Memory (bodies in RAM) or Disk (bodies snapshotted under `disk_cache`).
     pub(crate) storage: Storage,
     /// Root directory for the on-disk snapshot in Disk mode; unused in Memory.
@@ -54,22 +58,24 @@ impl Policy {
         storage: Storage,
         disk_cache: PathBuf,
     ) -> Policy {
+        let security_headers: Arc<str> = h.render().into();
         Policy {
             t,
             cc_immutable: format!("public, max-age={}, immutable", t.immutable_max_age).into(),
             cc_revalidate: format!("public, max-age={}, must-revalidate", t.cache_max_age).into(),
-            security_headers: h.render().into(),
+            errors: ErrorPages::new(&security_headers),
+            security_headers,
             storage,
             disk_cache,
         }
     }
 
-    /// Caching policy, derived from the URL alone — the server knows nothing
+    /// Caching policy, derived from the URL alone. The server knows nothing
     /// about any particular site's layout.
     ///
     /// A fingerprinted URL names one exact set of bytes: changing the content
     /// changes the hash, and therefore the URL. That is what makes `immutable`
-    /// safe, and it is the *only* thing that does — pinning an un-hashed path
+    /// safe, and it is the *only* thing that does. Pinning an un-hashed path
     /// strands the old bytes in every client's cache until they expire, with no
     /// way to bust them. So everything else revalidates instead, which the ETag
     /// makes cheap (a 304 is a header round trip, no body).
@@ -84,17 +90,128 @@ impl Policy {
 
 /// One precomputed response encoding: the complete keep-alive response
 /// (status line + headers + body) as a single contiguous buffer, so serving is
-/// one `write_all` — one TLS record, one syscall, zero per-request allocation.
+/// one `write_all`: one TLS record, one syscall, zero per-request allocation.
 /// `header_len` marks where the body starts (for HEAD and the rare close path).
 pub(crate) struct Variant {
     pub(crate) full_ka: Vec<u8>,
     pub(crate) header_len: usize,
-    pub(crate) etag: String, // strong validator (content hash), also baked into the header
+    pub(crate) etag: String, // strong validator (content hash), also inside the header
     pub(crate) encoding: Option<&'static str>, // Content-Encoding, echoed on 304s
 }
 
+/// One precomputed response in one `Connection` form. `header_len` marks where
+/// the body starts, so a HEAD answer is the same buffer truncated.
+struct Prebuilt {
+    full: Vec<u8>,
+    header_len: usize,
+}
+
+/// One precomputed status response, in both `Connection` forms. Errors are the
+/// one response class the server generates itself, and every input is fixed at
+/// boot, so the server precomputes them exactly as it does content. See `Variant`.
+pub(crate) struct StatusResponse {
+    ka: Prebuilt,
+    close: Prebuilt,
+}
+
+impl StatusResponse {
+    /// The exact bytes to write for one request. `keep_alive` picks the
+    /// `Connection` form. `is_head` drops the body (RFC 9112 6.3) while the
+    /// header keeps advertising its real length (RFC 9110 9.3.2).
+    pub(crate) fn bytes(&self, keep_alive: bool, is_head: bool) -> &[u8] {
+        let p = if keep_alive { &self.ka } else { &self.close };
+        if is_head {
+            &p.full[..p.header_len]
+        } else {
+            &p.full
+        }
+    }
+
+    fn retained_bytes(&self) -> usize {
+        self.ka.full.len() + self.close.full.len()
+    }
+}
+
+/// Every status this server generates on its own, built once per rendered
+/// security-header block. There is one set per site (so a site's `csp` covers
+/// its errors) and one server-level set for what is answered before a host
+/// resolves.
+pub(crate) struct ErrorPages {
+    pub(crate) bad_request: StatusResponse,          // 400
+    pub(crate) not_found: StatusResponse,            // 404
+    pub(crate) method_not_allowed: StatusResponse,   // 405
+    pub(crate) request_timeout: StatusResponse,      // 408
+    pub(crate) headers_too_large: StatusResponse,    // 431
+    pub(crate) internal_error: StatusResponse,       // 500
+}
+
+impl ErrorPages {
+    pub(crate) fn new(security_headers: &str) -> ErrorPages {
+        ErrorPages {
+            bad_request: build_status(400, "Bad Request", security_headers),
+            not_found: build_status(404, "Not Found", security_headers),
+            method_not_allowed: build_status(405, "Method Not Allowed", security_headers),
+            request_timeout: build_status(408, "Request Timeout", security_headers),
+            headers_too_large: build_status(
+                431,
+                "Request Header Fields Too Large",
+                security_headers,
+            ),
+            internal_error: build_status(500, "Internal Server Error", security_headers),
+        }
+    }
+
+    /// Resident bytes this set holds. Charged against `max_total_bytes` by the
+    /// callers that build a site, because the budget is documented as every byte
+    /// actually retained, not only the bytes of cached files.
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.bad_request.retained_bytes()
+            + self.not_found.retained_bytes()
+            + self.method_not_allowed.retained_bytes()
+            + self.request_timeout.retained_bytes()
+            + self.headers_too_large.retained_bytes()
+            + self.internal_error.retained_bytes()
+    }
+}
+
+/// Build both `Connection` forms of one generated status response.
+///
+/// `Cache-Control: no-store` is load-bearing. A 404 with no `Cache-Control` is
+/// heuristically cacheable (RFC 9111 4.2.2), so a shared cache is free to keep
+/// answering 404 for a URL after the page behind it exists. The server cannot
+/// know how long that would last, so it stores nothing.
+fn build_status(code: u16, reason: &str, security_headers: &str) -> StatusResponse {
+    let body = format!("<!doctype html><title>{code} {reason}</title><h1>{code} {reason}</h1>\n");
+    // Headers one status must carry beyond the common set. RFC 9110 15.5.6 makes
+    // `Allow` mandatory on a 405 from an origin server: without it a client sees
+    // the refusal but cannot learn which methods exist. This server answers only
+    // GET and HEAD, so the list is fixed.
+    let required = match code {
+        405 => "Allow: GET, HEAD\r\n",
+        _ => "",
+    };
+    let form = |conn: &str| {
+        let head = format!(
+            "HTTP/1.1 {code} {reason}\r\n\
+             Content-Type: text/html; charset=utf-8\r\n\
+             Content-Length: {}\r\n\
+             Cache-Control: no-store\r\n\
+             Connection: {conn}\r\n\
+             {required}\
+             {security_headers}\r\n",
+            body.len()
+        );
+        let header_len = head.len();
+        let mut full = Vec::with_capacity(header_len + body.len());
+        full.extend_from_slice(head.as_bytes());
+        full.extend_from_slice(body.as_bytes());
+        Prebuilt { full, header_len }
+    };
+    StatusResponse { ka: form("keep-alive"), close: form("close") }
+}
+
 /// A cached file, in memory: its identity response plus, for compressible
-/// types, gzip and brotli responses — all precompressed and prebuilt once at
+/// types, gzip and brotli responses, all precompressed and prebuilt once at
 /// boot, so compression costs nothing per request.
 pub(crate) struct MemEntry {
     pub(crate) identity: Variant,
@@ -154,7 +271,7 @@ pub(crate) type Cache = HashMap<String, Cached>;
 
 /// An owned on-disk build snapshot directory. Dropping it removes the directory
 /// and everything under it, so a superseded Disk-mode cache cleans up its
-/// snapshot once the last in-flight request holding it finishes — the same
+/// snapshot once the last in-flight request holding it finishes. This is the same
 /// lifetime discipline the in-memory Arc already gives content.
 pub(crate) struct BuildDir(PathBuf);
 impl Drop for BuildDir {
@@ -184,7 +301,7 @@ impl SiteCache {
 /// clones the current `Arc` under a brief read lock and holds it for the whole
 /// request, so a swap never disturbs an in-flight response (zero downtime).
 pub(crate) struct Site {
-    /// `None` for a host that serves no content of its own — it exists only to
+    /// `None` for a host that serves no content of its own. Such a host exists only to
     /// terminate TLS and answer with its redirect rules.
     pub(crate) root: Option<PathBuf>,
     pub(crate) cache: RwLock<Arc<SiteCache>>,
@@ -206,7 +323,7 @@ pub(crate) type Sites = HashMap<String, Arc<Site>>;
 
 /// The full host table. A name that only redirects (www -> apex) is an ordinary
 /// `Site` with no root and a catch-all rule, so there is exactly one kind of
-/// vhost here — and exactly one path through the server that emits a redirect.
+/// vhost here, and exactly one path through the server that emits a redirect.
 pub(crate) struct Vhosts {
     pub(crate) sites: Sites,
     /// The HTTPS listener's port ("443", "8443", ...). Emitted in redirect
@@ -216,23 +333,24 @@ pub(crate) struct Vhosts {
     /// site that serves over :80. Empty when there is no plain listener;
     /// omitted when it is 80.
     pub(crate) http_port: String,
-    /// Security headers for responses sent before any site is known: a 400 on a
-    /// malformed request head, a 404 for an unconfigured Host. Rendered from the
-    /// server-level `HeaderConfig`; once a site is resolved its own headers
-    /// apply instead.
-    pub(crate) security_headers: Arc<str>,
+    /// The responses sent before any site is known: a 400 on a malformed request
+    /// head, a 404 for an unconfigured Host, and the 408/431 the read loop
+    /// answers with. All of them are errors, so the server-level `HeaderConfig`
+    /// reaches the wire inside these buffers rather than as a field of its
+    /// own. Once a site resolves, its own precomputed set applies instead.
+    pub(crate) errors: ErrorPages,
 }
 
 /// True if a URL's filename carries a content hash, by convention: the last
 /// `-`-separated segment of the stem is 8+ hex digits, e.g.
 /// `/style-0667c2b357.css` or `/assets/fonts/source-sans-3-400-a1b2c3d4e5.woff2`.
 ///
-/// The 8-digit floor is what keeps ordinary words from matching — a stem ending
+/// The 8-digit floor is what keeps ordinary words from matching: a stem ending
 /// in `-latin` or `-normal` is not hex, and short hex-ish words like `-faced`
 /// are too short to qualify. An all-decimal suffix is rejected as well: dates
 /// and version numbers (`export-20240115.json`) are hex-clean but do *not*
 /// change with the bytes, and pinning one strands stale content for a year.
-/// A real hash that happens to be all digits merely revalidates — a wasted
+/// A real hash that happens to be all digits merely revalidates: a wasted
 /// round trip, never a wrong answer, so the heuristic errs in the safe
 /// direction.
 fn is_fingerprinted(url: &str) -> bool {
@@ -323,7 +441,7 @@ fn build_header(
     h
 }
 
-/// Bake a full keep-alive response (header + body) for one body/encoding.
+/// Build a full keep-alive response (header + body) for one body/encoding.
 fn build_variant(
     mime: &str,
     body: &[u8],
@@ -349,7 +467,7 @@ fn compress_variants(mime: &str, data: &[u8], p: &Policy) -> (Option<Vec<u8>>, O
         return (None, None);
     }
     // gzip gets the high ceiling (it is cheap); brotli the low one (it is not).
-    // A large bundle between the two limits is still served gzipped — dropping
+    // A large bundle between the two limits is still served gzipped. Dropping
     // it to identity-only would have put megabytes back on the wire for no
     // boot-time saving worth the name.
     let gz = (data.len() <= p.t.max_gzip_bytes)
@@ -399,7 +517,7 @@ fn make_disk_entry(
     // "<build>/app.js.gz", and whichever the directory walk reaches last silently
     // overwrites the other's body while both keep their own Content-Length and
     // ETag in RAM. The result is a response that under-delivers its declared
-    // length on a connection that stays open — a desync — or serves one asset's
+    // length on a connection that stays open (a desync), or serves one asset's
     // bytes under the other's validator. Namespacing by encoding makes the
     // mapping injective: URLs are unique cache keys, so one URL is one file in
     // one namespace, whatever it is named.
@@ -445,7 +563,7 @@ static BUILD_SEQ: AtomicUsize = AtomicUsize::new(0);
 
 /// Remove leftover `build-*` snapshot directories from a previous run. Drop
 /// cleans them up on a graceful swap, but a process killed mid-life leaves its
-/// live snapshot behind, and `BUILD_SEQ` restarts at 0 — so without this a
+/// live snapshot behind, and `BUILD_SEQ` restarts at 0, so without this a
 /// restart could write into a stale directory or slowly accumulate orphans.
 /// Best-effort; called once at startup for the configured `disk_cache`.
 pub(crate) fn clear_stale_builds(disk_cache: &Path) {
@@ -565,7 +683,7 @@ fn walk(
             }
             // Cheap pre-read guard: never read a file that cannot possibly fit
             // the RAM budget. Disk mode holds no bodies in RAM, so the budget
-            // (a RAM ceiling) does not gate it — only disk space does.
+            // (a RAM ceiling) does not gate it. Only disk space does.
             if build_dir.is_none() && *total + size > p.t.max_total_bytes {
                 eprintln!("bare-server: cache exceeds max_total_bytes at {url}");
                 return false;
@@ -705,7 +823,7 @@ pub(crate) fn tls_signature(paths: &[String]) -> u64 {
 /// and a file that lands while `build_cache` is walking is absent from the cache
 /// it produces. Sampling *after* the build would record that file as already
 /// applied, and since nothing on disk changes again the watcher would never
-/// rebuild — the URL 404s until an unrelated edit perturbs the tree. Sampling
+/// rebuild: the URL 404s until an unrelated edit perturbs the tree. Sampling
 /// first leaves `now != applied`, so the very next tick picks it up. The same
 /// hazard applies to `server.conf` itself: an operator who rewrites it during
 /// the boot build must not have that edit silently swallowed, so its signature
@@ -719,7 +837,7 @@ pub(crate) struct Sampled {
 }
 
 /// What each configured `root` currently resolves to. `build_vhosts` canonicalises
-/// the root and keeps only the *resolved* directory, which is what gets watched —
+/// the root and keeps only the *resolved* directory, which is what gets watched.
 /// so with the usual release layout (`/srv/www -> /srv/releases/42`) the watcher
 /// polls release 42 forever and a symlink flip to release 43 changes nothing under
 /// the path it is looking at. Recording the link target lets the watcher notice the
@@ -734,7 +852,7 @@ pub(crate) fn root_links(cfg: &Config) -> Vec<(String, PathBuf)> {
 }
 
 /// `root_links` for the config file as it currently reads. `None` when the file
-/// cannot be parsed — a half-written config is not evidence that a root moved,
+/// cannot be parsed: a half-written config is not evidence that a root moved,
 /// and the config-signature path already handles (and retries) that case.
 pub(crate) fn root_links_of(config_path: &str) -> Option<Vec<(String, PathBuf)>> {
     crate::config::load_config(config_path).ok().map(|c| root_links(&c))
@@ -761,6 +879,79 @@ mod tests {
 
     fn pol() -> Policy {
         Policy::new(Tuning::default())
+    }
+
+    #[test]
+    fn a_status_response_is_one_buffer_per_connection_form() {
+        let e = ErrorPages::new("X-Site: yes\r\n");
+        let ka = String::from_utf8_lossy(e.not_found.bytes(true, false)).into_owned();
+        let close = String::from_utf8_lossy(e.not_found.bytes(false, false)).into_owned();
+        assert!(ka.starts_with("HTTP/1.1 404 Not Found\r\n"), "{ka}");
+        assert!(ka.contains("Connection: keep-alive\r\n"), "{ka}");
+        assert!(close.contains("Connection: close\r\n"), "{close}");
+        // The site's own header block is inside the buffer, so an error carries
+        // the same CSP and HSTS as that site's 200s.
+        assert!(ka.contains("X-Site: yes\r\n"), "{ka}");
+        // A 404 must never be stored: see `build_status`.
+        assert!(ka.contains("Cache-Control: no-store\r\n"), "{ka}");
+        // Header and body are one buffer, which is the whole point.
+        let (head, body) = ka.split_once("\r\n\r\n").expect("header terminator");
+        assert_eq!(body, "<!doctype html><title>404 Not Found</title><h1>404 Not Found</h1>\n");
+        assert!(head.contains(&format!("Content-Length: {}\r\n", body.len())), "{head}");
+    }
+
+    #[test]
+    fn a_head_answer_is_the_same_buffer_without_the_body() {
+        let e = ErrorPages::new("");
+        for keep_alive in [true, false] {
+            let full = e.internal_error.bytes(keep_alive, false);
+            let head = e.internal_error.bytes(keep_alive, true);
+            assert!(full.starts_with(head), "a HEAD answer is a prefix of the GET answer");
+            assert!(head.ends_with(b"\r\n\r\n"), "it stops at the header terminator");
+            assert!(full.len() > head.len(), "the GET answer carries a body");
+        }
+        // Both forms are retained, and both are charged to the RAM budget.
+        assert_eq!(
+            e.internal_error.retained_bytes(),
+            e.internal_error.bytes(true, false).len() + e.internal_error.bytes(false, false).len()
+        );
+    }
+
+    #[test]
+    fn every_generated_status_is_precomputed() {
+        // One buffer per status this server emits. A status added to the serve
+        // path without a buffer here would not compile, so this only has to
+        // check that each one is really populated.
+        let e = ErrorPages::new("");
+        for (resp, line) in [
+            (&e.bad_request, "HTTP/1.1 400 Bad Request\r\n"),
+            (&e.not_found, "HTTP/1.1 404 Not Found\r\n"),
+            (&e.method_not_allowed, "HTTP/1.1 405 Method Not Allowed\r\n"),
+            (&e.request_timeout, "HTTP/1.1 408 Request Timeout\r\n"),
+            (&e.headers_too_large, "HTTP/1.1 431 Request Header Fields Too Large\r\n"),
+            (&e.internal_error, "HTTP/1.1 500 Internal Server Error\r\n"),
+        ] {
+            assert!(resp.bytes(true, false).starts_with(line.as_bytes()), "missing {line}");
+        }
+        assert!(e.retained_bytes() > 0);
+    }
+
+    #[test]
+    fn the_405_names_the_methods_it_allows() {
+        // RFC 9110 15.5.6: an origin server that refuses a method MUST say which
+        // methods it supports, or the client cannot adapt. Both connection forms
+        // carry it, and it sits in the header block, not the body.
+        let e = ErrorPages::new("");
+        for keep_alive in [true, false] {
+            let head = String::from_utf8_lossy(e.method_not_allowed.bytes(keep_alive, true))
+                .to_string();
+            assert!(head.contains("Allow: GET, HEAD\r\n"), "{head}");
+        }
+        // And no other status claims to allow anything.
+        for resp in [&e.bad_request, &e.not_found, &e.request_timeout, &e.internal_error] {
+            let full = String::from_utf8_lossy(resp.bytes(true, false)).to_string();
+            assert!(!full.contains("Allow:"), "{full}");
+        }
     }
 
     #[test]
@@ -1035,7 +1226,7 @@ mod signature_tests {
 
     #[test]
     fn sample_skips_a_site_that_has_no_tree() {
-        // A redirect-only site has no root, so there is nothing to hash — and
+        // A redirect-only site has no root, so there is nothing to hash, and
         // nothing for the watcher to try (and fail) to rebuild every tick.
         let c = cfg(vec![site("w", None, "cr", "kr")]);
         assert!(sample("/nonexistent.conf", &c).trees.is_empty());
@@ -1217,7 +1408,7 @@ mod disk_tests {
 
     #[test]
     fn precompressed_sidecars_do_not_collide_with_generated_ones() {
-        // A docroot that ships `style.css` alongside a real `style.css.gz` — the
+        // A docroot that ships `style.css` alongside a real `style.css.gz`. The
         // normal output of a gzip_static-style build. Both used to snapshot to
         // "<build>/style.css.gz", so one silently overwrote the other and its
         // entry then declared a Content-Length the file on disk did not have.
