@@ -37,7 +37,7 @@ Prebuilt images are published to GitHub's registry for `linux/amd64` and
 `linux/arm64` on every release:
 
 ```sh
-docker pull ghcr.io/nsinenko/bare-server:latest     # or :0.1.0, :0.1
+docker pull ghcr.io/nsinenko/bare-server:latest     # or :0.2.0, :0.2
 ```
 
 They are assembled from the same static binaries as the release tarballs, so the

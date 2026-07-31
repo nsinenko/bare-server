@@ -160,12 +160,14 @@ License that covers the project.
 
 A version tag cuts a release. Nothing publishes on an ordinary push.
 
-1. Bump `version` in `Cargo.toml`, and commit (`Cargo.lock` updates with it).
-2. Tag and push:
+1. Move the `Unreleased` entries of [`CHANGELOG.md`](CHANGELOG.md) under a new
+   version heading, with the release date and the compare links.
+2. Bump `version` in `Cargo.toml`, and commit (`Cargo.lock` updates with it).
+3. Tag and push:
 
    ```sh
-   git tag -a v0.1.0 -m 'v0.1.0'
-   git push origin v0.1.0
+   git tag -a v0.2.0 -m 'v0.2.0'
+   git push origin v0.2.0
    ```
 
 [`.github/workflows/release.yml`](.github/workflows/release.yml) then checks that

@@ -1,6 +1,6 @@
 [package]
 name = "bare-server"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "A minimal static-file web server with built-in TLS termination, in a single static binary"
 authors = ["Nikita Sinenko <nikita.sinenko@gmail.com>"]
