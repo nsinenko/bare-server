@@ -21,3 +21,7 @@
 /www/*
 !/www/index.html
 !/www/favicon.svg
+
+# Local working notes: planning docs, decision records, scratch analysis.
+# Personal to a checkout; not part of the project.
+/notes/
