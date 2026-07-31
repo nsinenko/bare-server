@@ -134,8 +134,20 @@ Refuse to cache past this, counted across every site and against the bytes
 actually retained (identity, gzip, and brotli are each their own buffer). This
 is server-only because it is one pool shared by all sites.
 
-A reload builds the replacement cache before dropping the old one, so **both are
-resident at peak** — size the host for 2× this value.
+The precomputed error responses count too. They stay resident for the life of the
+process, in both storage modes, and a redirect-only site holds a set as well. One
+set is 5,690 bytes with the default headers, a little more with a CSP, and the
+server holds one per site plus one for the responses that go out before any host
+resolves. The floor is therefore about `(sites + 1) x 6K`, so only a budget in the
+low kilobytes can fail on this alone. The load then stops before it reads that
+site's document root, and the message names the bytes already retained rather than
+send you looking at content that was never read.
+
+Content that does not fit reports the URL it gave up on instead:
+`cache exceeds max_total_bytes at <url>`.
+
+A reload builds the replacement cache before it drops the old one, so **both are
+resident at peak**. Size the host for twice this value.
 
 ### `max_conns_per_ip`
 
@@ -354,14 +366,19 @@ already-compressed types (images, video, fonts) are skipped outright.
 | `cache_max_age` | `0` | `max-age` for un-fingerprinted URLs. |
 | `immutable_max_age` | `31536000` | `max-age` for fingerprinted URLs, sent with `immutable`. |
 
-A **fingerprinted** URL is one whose filename ends in 8 or more hex digits — for
+A **fingerprinted** URL is one whose filename ends in 8 or more hex digits, for
 example `/style-0667c2b357.css`. Such a URL names one exact set of bytes, so it
 is safe to pin for a year and mark immutable. (An all-decimal suffix does not
 count, so `/report-20240101.pdf` is not mistaken for a fingerprint.)
 
 Everything else revalidates by default, which the `ETag` makes cheap. Raising
-`cache_max_age` above 0 pins un-hashed URLs too — only do that if you can
+`cache_max_age` above 0 pins un-hashed URLs too. Only do that if you can
 tolerate stale content until it expires.
+
+Neither directive applies to an error. Every 4xx and 5xx carries a fixed
+`Cache-Control: no-store`, and that is not configurable. A 404 with no
+`Cache-Control` is heuristically cacheable, so a shared cache could keep
+answering 404 for a URL that the site published later.
 
 ## Security response headers
 
