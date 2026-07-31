@@ -36,14 +36,14 @@ libc = "0.2"
 
 [profile.release]
 # "s" over 3: the request hot path is a hashmap lookup, a short header scan and
-# one write_all of a precomputed buffer — the real CPU work is inside ring's
+# one write_all of a precomputed buffer. The real CPU work is inside ring's
 # hand-written assembly, which opt-level does not touch. Measured on a static
 # musl build: 2,560,192 -> 2,232,512 bytes (-12.8%).
 opt-level = "s"
 lto = true
 codegen-units = 1
 strip = true
-# NOTE: panic defaults to unwind on purpose — a panic in one connection thread
+# NOTE: panic defaults to unwind on purpose, so a panic in one connection thread
 # stays contained to that thread instead of aborting the whole server.
 
 # Boot-time compression is the one place opt-level actually buys throughput, and

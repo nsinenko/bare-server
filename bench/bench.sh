@@ -161,7 +161,7 @@ RSS=$(ps -o rss= -p "$SRV_PID" | tr -d ' ')
 note "resident memory: $(perl -e "printf '%.1f', $RSS/1024") MiB (storage = memory)"
 
 # ------------------------------------------------------------------ integrity
-say "Compression (deterministic — reproduces on any host)"
+say "Compression (deterministic, reproduces on any host)"
 printf '   %-26s %10s %10s %10s %8s %8s\n' FILE IDENTITY GZIP BROTLI GZIP% BR%
 for f in index.html app.css app.js articles/post-1.html photo.png tiny.txt; do
     id=$(curl -sk --ipv4 -o /dev/null -w '%{size_download}' "https://localhost:$PORT_HTTPS/$f")
@@ -170,7 +170,7 @@ for f in index.html app.css app.js articles/post-1.html photo.png tiny.txt; do
     printf '   %-26s %10s %10s %10s %7s%% %7s%%\n' "$f" "$id" "$gz" "$br" \
         "$(perl -e "printf '%.0f', 100-100*$gz/$id")" "$(perl -e "printf '%.0f', 100-100*$br/$id")"
 done
-note "photo.png and tiny.txt are expected to show 0% — already-compressed type, and under min_compress_bytes."
+note "photo.png and tiny.txt are expected to show 0%: already-compressed type, and under min_compress_bytes."
 
 # ----------------------------------------------------------------------- load
 if [ "$RUN_LOAD" -eq 0 ]; then
@@ -182,12 +182,12 @@ LOADER=""
 command -v wrk >/dev/null 2>&1 && LOADER=wrk
 [ -z "$LOADER" ] && command -v oha >/dev/null 2>&1 && LOADER=oha
 if [ -z "$LOADER" ]; then
-    say "No load generator found (install wrk or oha) — skipping throughput"
+    say "No load generator found (install wrk or oha), skipping throughput"
     exit 0
 fi
 
 # $3 is an optional request header, passed as one argument rather than spliced
-# into a command string — an embedded `-H 'Accept-Encoding: br'` would reach the
+# into a command string. An embedded `-H 'Accept-Encoding: br'` would reach the
 # loader with its quotes intact and be parsed as garbage.
 run_load() {
     label=$1; url=$2; hdr=${3:-}
@@ -207,7 +207,7 @@ run_load() {
     fi
 }
 
-say "Load (this machine only — the generator shares its CPUs with the server)"
+say "Load (this machine only; the generator shares its CPUs with the server)"
 note "loader: $LOADER, ${CONNS} connections, ${THREADS} threads, ${DURATION}s per phase"
 
 run_load "HTTPS keep-alive, 9 KB HTML (identity)" "https://localhost:$PORT_HTTPS/index.html"
@@ -219,11 +219,11 @@ run_load "HTTP  keep-alive, 301 upgrade" "http://localhost:$PORT_HTTP/index.html
 
 # The cost of a fresh connection: what resumption and 0-RTT exist to avoid.
 #
-# `openssl s_time` is the obvious tool and cannot be used here — it has no
+# `openssl s_time` is the obvious tool and cannot be used here: it has no
 # -servername option, so it sends no SNI and this server refuses the handshake.
 # curl reports the timing breakdown instead: time_appconnect - time_connect is
 # exactly the TLS handshake, TCP already established.
-say "TLS handshake latency (one connection at a time — a latency figure, not throughput)"
+say "TLS handshake latency (one connection at a time; a latency figure, not throughput)"
 HS_N=50
 # One curl process per sample on purpose: passing N URLs to a single curl makes
 # it reuse the connection, so only the first would carry a handshake at all.

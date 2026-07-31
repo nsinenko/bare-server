@@ -4,7 +4,7 @@
 # Deliberately NOT a copy of ./Dockerfile. That one compiles from source, which
 # is right for `docker build .` on a developer machine but wrong here for two
 # reasons: building for linux/arm64 on an amd64 runner means compiling Rust under
-# QEMU emulation (tens of minutes for ring's assembly), and — more importantly —
+# QEMU emulation (tens of minutes for ring's assembly), and, more importantly,
 # it would produce a *different* binary from the one in the release tarballs and
 # the SHA256SUMS beside them. Assembling the image from the already-built,
 # already-checksummed static binaries means the container and the tarball for a

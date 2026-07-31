@@ -192,7 +192,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
 
-      # crates.io versions are permanent — they can be yanked but never deleted,
+      # crates.io versions are permanent: they can be yanked but never deleted,
       # and a re-publish of an existing version is a hard error. Re-running this
       # workflow for a tag that is already on the registry is a normal thing to
       # want (a failed binary build, a re-cut release), so treat "already there"
@@ -238,7 +238,7 @@ jobs:
         run: cargo publish --locked
 
   # Multi-arch container image on GitHub's registry. GitHub Packages has no Cargo
-  # registry, so the crate itself can only live on crates.io — but the image is
+  # registry, so the crate itself can only live on crates.io, but the image is
   # worth publishing here, since the deployment guide otherwise asks every
   # operator to build it themselves.
   #
@@ -288,7 +288,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      # v1.2.3 -> :1.2.3, :1.2, :latest. No :1 — a 0.x major carries no
+      # v1.2.3 -> :1.2.3, :1.2, :latest. No :1, because a 0.x major carries no
       # compatibility promise, and pinning to it would be misleading.
       - uses: docker/metadata-action@v5
         id: meta

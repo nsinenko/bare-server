@@ -4,7 +4,7 @@
 # macOS junk
 .DS_Store
 
-# Local TLS material — self-signed test certs from gen-cert.sh.
+# Local TLS material: self-signed test certs from gen-cert.sh.
 # Never commit private keys.
 /tls/
 /tls-ec/
@@ -16,7 +16,7 @@
 /server.conf
 
 # Test content served from the placeholder document root. Only the placeholder
-# page and the favicon it references are tracked — site content does not belong
+# page and the favicon it references are tracked. Site content does not belong
 # in this repository.
 /www/*
 !/www/index.html
