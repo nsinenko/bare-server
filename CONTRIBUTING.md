@@ -49,7 +49,7 @@ pair. Nothing reads a certificate from the source tree, and no key material is
 committed.
 
 ```sh
-cargo clippy --all-targets --locked
+cargo clippy --all-targets --locked -- -D warnings
 ```
 
 **`cargo test --locked` must pass after every patch.** If you change behavior, the

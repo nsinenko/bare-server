@@ -234,7 +234,7 @@ impl Redirects {
     /// Longest prefix first, so `/docs/api/*` beats `/docs/*` no matter which
     /// line came first. Called once per site after its block is parsed.
     fn finish(&mut self) {
-        self.prefix.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        self.prefix.sort_by_key(|p| std::cmp::Reverse(p.0.len()));
     }
 }
 

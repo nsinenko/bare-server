@@ -876,6 +876,7 @@ fn resolve<'a>(cache: &'a Cache, decoded: &str) -> Option<Resolved<'a>> {
 ///   - `nlink == 1`: a hardlink planted in the challenge dir pointing at a file
 ///     outside the root is a real regular file `O_NOFOLLOW` cannot catch, so
 ///     refuse anything with more than one link (a genuine ACME token has one).
+///
 /// Returns None on any failure, which the caller turns into a 404. The parent
 /// directory checks in `serve_acme_token` remain best-effort against a static
 /// layout; swapping a *parent* dir for a symlink mid-request is a much narrower
@@ -2179,17 +2180,21 @@ struct ListenerCtl {
     label: &'static str,
 }
 
-/// Spawn an accept loop for `listener`, tagged with `generation`.
-fn spawn_accept(
-    listener: Arc<TcpListener>,
-    generation: usize,
+/// Everything an accept loop shares with the rest of the process. One struct
+/// because both call sites pass the same six values, and a parameter list that
+/// long is easy to reorder by accident: every entry but `tls` is an `Arc`.
+struct AcceptCtx {
     gen_ctr: Arc<AtomicUsize>,
     sem: Arc<Semaphore>,
     peer: Arc<PeerLimiter>,
     response_secs: Arc<AtomicU64>,
     shared: SharedRuntime,
     tls: bool,
-) {
+}
+
+/// Spawn an accept loop for `listener`, tagged with `generation`.
+fn spawn_accept(listener: Arc<TcpListener>, generation: usize, ctx: AcceptCtx) {
+    let AcceptCtx { gen_ctr, sem, peer, response_secs, shared, tls } = ctx;
     let label = if tls { "HTTPS" } else { "HTTP" };
     thread::spawn(move || {
         let mut last_log: Option<Instant> = None;
@@ -2335,12 +2340,14 @@ fn rebind(ctl: &mut ListenerCtl, new_addr: &str, shared: &SharedRuntime) -> Resu
     spawn_accept(
         listener,
         0,
-        Arc::clone(&gen),
-        Arc::clone(&ctl.sem),
-        Arc::clone(&ctl.peer),
-        Arc::clone(&ctl.response_secs),
-        Arc::clone(shared),
-        ctl.tls,
+        AcceptCtx {
+            gen_ctr: Arc::clone(&gen),
+            sem: Arc::clone(&ctl.sem),
+            peer: Arc::clone(&ctl.peer),
+            response_secs: Arc::clone(&ctl.response_secs),
+            shared: Arc::clone(shared),
+            tls: ctl.tls,
+        },
     );
     eprintln!("bare-server: {} rebound {} -> {new_addr}", ctl.label, ctl.addr);
     ctl.addr = new_addr.to_string();
@@ -2368,12 +2375,14 @@ fn start_listener(
     spawn_accept(
         listener,
         0,
-        Arc::clone(&gen),
-        Arc::clone(&sem),
-        Arc::clone(&peer),
-        Arc::clone(&response_secs),
-        Arc::clone(shared),
-        tls,
+        AcceptCtx {
+            gen_ctr: Arc::clone(&gen),
+            sem: Arc::clone(&sem),
+            peer: Arc::clone(&peer),
+            response_secs: Arc::clone(&response_secs),
+            shared: Arc::clone(shared),
+            tls,
+        },
     );
     Ok(ListenerCtl { addr: addr.to_string(), gen, sem, peer, response_secs, tls, label })
 }
