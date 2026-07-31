@@ -1,7 +1,7 @@
 //! The in-memory content cache and the change-detection that feeds the
 //! hot-reload watcher.
 //!
-//! At boot every document root is walked once and each file is baked into a
+//! At boot every document root is walked once and each file becomes a
 //! set of ready-to-write responses (identity, and gzip/brotli for compressible
 //! types). Serving a request is then a single `write_all` of a precomputed
 //! buffer. The signature helpers (`file_signature`, `tree_signature`,
@@ -27,12 +27,12 @@ pub(crate) struct Policy {
     pub(crate) t: Tuning,
     cc_immutable: Arc<str>,
     cc_revalidate: Arc<str>,
-    /// The security-header block baked into every cached response, rendered once
+    /// The security-header block inside every cached response, rendered once
     /// from the config's `HeaderConfig`. Shared (Arc) with `Vhosts` so the
     /// on-the-fly error/redirect paths emit exactly the same headers.
     pub(crate) security_headers: Arc<str>,
     /// This site's precomputed 4xx/5xx responses, carrying the same
-    /// `security_headers` block above. Baked here rather than per request, so an
+    /// `security_headers` block above. Built here rather than per request, so an
     /// error costs one `write_all` like a cache hit does.
     pub(crate) errors: ErrorPages,
     /// Memory (bodies in RAM) or Disk (bodies snapshotted under `disk_cache`).
@@ -95,7 +95,7 @@ impl Policy {
 pub(crate) struct Variant {
     pub(crate) full_ka: Vec<u8>,
     pub(crate) header_len: usize,
-    pub(crate) etag: String, // strong validator (content hash), also baked into the header
+    pub(crate) etag: String, // strong validator (content hash), also inside the header
     pub(crate) encoding: Option<&'static str>, // Content-Encoding, echoed on 304s
 }
 
@@ -108,7 +108,7 @@ struct Prebuilt {
 
 /// One precomputed status response, in both `Connection` forms. Errors are the
 /// one response class the server generates itself, and every input is fixed at
-/// boot, so they are baked exactly like content is. See `Variant`.
+/// boot, so the server precomputes them exactly as it does content. See `Variant`.
 pub(crate) struct StatusResponse {
     ka: Prebuilt,
     close: Prebuilt,
@@ -132,7 +132,7 @@ impl StatusResponse {
     }
 }
 
-/// Every status this server generates on its own, baked once per rendered
+/// Every status this server generates on its own, built once per rendered
 /// security-header block. There is one set per site (so a site's `csp` covers
 /// its errors) and one server-level set for what is answered before a host
 /// resolves.
@@ -174,7 +174,7 @@ impl ErrorPages {
     }
 }
 
-/// Bake both `Connection` forms of one generated status response.
+/// Build both `Connection` forms of one generated status response.
 ///
 /// `Cache-Control: no-store` is load-bearing. A 404 with no `Cache-Control` is
 /// heuristically cacheable (RFC 9111 4.2.2), so a shared cache is free to keep
@@ -336,7 +336,7 @@ pub(crate) struct Vhosts {
     /// The responses sent before any site is known: a 400 on a malformed request
     /// head, a 404 for an unconfigured Host, and the 408/431 the read loop
     /// answers with. All of them are errors, so the server-level `HeaderConfig`
-    /// reaches the wire baked into these buffers rather than as a field of its
+    /// reaches the wire inside these buffers rather than as a field of its
     /// own. Once a site resolves, its own precomputed set applies instead.
     pub(crate) errors: ErrorPages,
 }
@@ -441,7 +441,7 @@ fn build_header(
     h
 }
 
-/// Bake a full keep-alive response (header + body) for one body/encoding.
+/// Build a full keep-alive response (header + body) for one body/encoding.
 fn build_variant(
     mime: &str,
     body: &[u8],
@@ -889,8 +889,8 @@ mod tests {
         assert!(ka.starts_with("HTTP/1.1 404 Not Found\r\n"), "{ka}");
         assert!(ka.contains("Connection: keep-alive\r\n"), "{ka}");
         assert!(close.contains("Connection: close\r\n"), "{close}");
-        // The site's own header block is baked in, so an error carries the same
-        // CSP and HSTS the cache baked into that site's 200s.
+        // The site's own header block is inside the buffer, so an error carries
+        // the same CSP and HSTS as that site's 200s.
         assert!(ka.contains("X-Site: yes\r\n"), "{ka}");
         // A 404 must never be stored: see `build_status`.
         assert!(ka.contains("Cache-Control: no-store\r\n"), "{ka}");

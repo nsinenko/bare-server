@@ -23,7 +23,7 @@
 //! Three key classes, enforced so a directive in the wrong place is an error
 //! rather than a silent no-op: server-only (`listen`, `storage`, the shared
 //! cache budget, the connection caps), site-only (`root`, `cert`, `key`,
-//! `force_ssl`, `redirect`), and the rest — settable at either level, where the
+//! `force_ssl`, `redirect`), and the rest, settable at either level, where the
 //! server-level value is the default and a site block overrides it.
 
 use std::collections::HashMap;
@@ -38,7 +38,7 @@ use std::fs;
 /// deliberately not a regex: an exact-path hash lookup, then a longest-first
 /// scan of the prefix rules, then the optional whole-host catch-all. Per-request
 /// cost is O(1) plus a scan bounded by the number of prefix rules the operator
-/// wrote, and no pattern the format can express makes that worse — which is the
+/// wrote, and no pattern the format can express makes that worse. That is the
 /// whole point in a server whose hot path is otherwise one hash lookup and one
 /// `write_all`.
 #[derive(Clone, Default)]
@@ -55,7 +55,7 @@ pub(crate) struct Redirects {
 
 /// Expand a target template against one match. `$0` is the whole request path,
 /// `$1` the part a `/prefix/*` pattern captured, `$$` a literal `$`. Anything
-/// else after a `$` is left alone — targets are ordinary URLs and a lone `$` in
+/// else after a `$` is left alone: targets are ordinary URLs and a lone `$` in
 /// one should not have to be escaped.
 fn expand(template: &str, path: &str, cap: &str) -> String {
     if !template.contains('$') {
@@ -94,8 +94,8 @@ fn expand(template: &str, path: &str, cap: &str) -> String {
 /// thing and a textual check waves them through.
 ///
 /// The query and fragment are dropped before comparing. Neither reaches the
-/// server on the next hop in a way that changes which rule matches — a fragment
-/// is never sent at all, and rules match on the path with the query stripped —
+/// server on the next hop in a way that changes which rule matches: a fragment
+/// is never sent at all, and rules match on the path with the query stripped,
 /// so `/a -> $0#x` and `/a -> $0?v=1` both loop just as surely as `/a -> $0`.
 ///
 /// A target that is an absolute URL is left alone: it names some other origin,
@@ -115,8 +115,8 @@ impl Redirects {
     }
 
     /// Resolve one request path to a redirect target, or `None` to keep serving
-    /// normally. `path` is the RAW request path — still percent-encoded, query
-    /// already stripped — so a rule matches the bytes the client actually sent
+    /// normally. `path` is the RAW request path, still percent-encoded with the
+    /// query already stripped, so a rule matches the bytes the client actually sent
     /// and the capture it hands back keeps whatever encoding was there. The
     /// caller re-attaches the query string and, for a target that is a bare path,
     /// the scheme and authority.
@@ -135,12 +135,12 @@ impl Redirects {
     }
 
     /// Record one `redirect <pattern> -> <target>` rule. Every rejection here is
-    /// a config that would misbehave at runtime — an ambiguous duplicate, a
+    /// a config that would misbehave at runtime: an ambiguous duplicate, a
     /// target that cannot go in a `Location`, or a rule that redirects a path to
-    /// itself — and this server would rather fail the (re)load than serve it.
+    /// itself. This server would rather fail the (re)load than serve it.
     fn push(&mut self, pattern: &str, target: &str) -> Result<(), String> {
         // The target is interpolated into a response header, and `$0`/`$1` splice
-        // in request bytes at serve time — but those are control-character-free
+        // in request bytes at serve time, but those are control-character-free
         // by the time they get there (the request target is validated up front),
         // so checking the template alone covers both halves.
         if target.bytes().any(|b| b < 0x20 || b == 0x7f) {
@@ -150,10 +150,10 @@ impl Redirects {
             return Err("redirect: empty target".into());
         }
         // Either an absolute URL (cross-host) or a rooted path on this host.
-        // Anything else — a bare "example.com", a relative "new" — would produce
+        // Anything else, such as a bare "example.com" or a relative "new", would produce
         // a Location the client resolves somewhere unintended. A leading `$0` is
         // rooted too: it expands to the request path, which always starts with
-        // '/'. A leading `$1` is not — a `/docs/*` remainder is "a/b", so
+        // '/'. A leading `$1` is not: a `/docs/*` remainder is "a/b", so
         // `-> $1` would emit a relative Location.
         let absolute = target.starts_with("http://") || target.starts_with("https://");
         if !absolute && !target.starts_with('/') && !target.starts_with("$0") {
@@ -173,7 +173,7 @@ impl Redirects {
                 }
                 Some(d) if d.is_ascii_digit() => {
                     return Err(format!(
-                        "redirect: unknown capture ${d} in target (only $0 — the whole path — and $1 — a /prefix/* remainder — exist)"
+                        "redirect: unknown capture ${d} in target (only $0, the whole path, and $1, a /prefix/* remainder, exist)"
                     ));
                 }
                 _ => {}
@@ -197,7 +197,7 @@ impl Redirects {
             ));
         }
         if let Some(prefix) = pattern.strip_suffix('*') {
-            // Only `/some/prefix/*` — a `*` mid-pattern would need a matcher this
+            // Only `/some/prefix/*`. A `*` mid-pattern would need a matcher this
             // deliberately does not have, and a `*` not on a segment boundary
             // (`/a*`) reads as if it also matched `/abc`, which it would. Anchor
             // it to the slash so the meaning is never ambiguous.
@@ -244,7 +244,7 @@ impl Redirects {
 /// (used for SNI selection), redirect rules, and its own resolved copy of every
 /// per-site tunable.
 ///
-/// `hosts` may list several comma-separated names — they share one cache, one
+/// `hosts` may list several comma-separated names. They share one cache, one
 /// rule set and one certificate, which must cover every name listed.
 pub(crate) struct SiteConfig {
     pub(crate) hosts: Vec<String>,
@@ -280,14 +280,14 @@ pub(crate) struct Config {
     pub(crate) http_port: String,
     pub(crate) sites: Vec<SiteConfig>,
     /// Server-level response headers. Every site carries its own resolved copy
-    /// of these; this one covers the responses sent before a host is known — a
-    /// 400 on a malformed request head, a 404 for an unconfigured Host — which
+    /// of these; this one covers the responses sent before a host is known: a
+    /// 400 on a malformed request head, a 404 for an unconfigured Host, which
     /// belong to no site.
     ///
     /// There is deliberately no server-level `Tuning` here: the cache and
     /// compression settings only ever act through a site, so each site's
     /// resolved copy (defaults + its own overrides) is the single source of
-    /// truth — including `max_total_bytes`, which is copied unchanged into every
+    /// truth, including `max_total_bytes`, which is copied unchanged into every
     /// site precisely because it is one shared budget.
     pub(crate) headers: HeaderConfig,
     /// Max concurrent connections from one source IP (0 = unlimited). A single
@@ -382,15 +382,15 @@ pub(crate) const DEF_MAX_FILE_SIZE: usize = 256 << 20; // skip any single file >
 // resident at peak: size the host for 2x this ceiling.
 pub(crate) const DEF_MAX_TOTAL_BYTES: usize = 2 << 30;
 // Above this, a file gets no brotli variant. Brotli is done at boot, serially,
-// at quality 11 (~1 MB/s), and nothing is bound until it finishes — so a 60 MB
+// at quality 11 (~1 MB/s), and nothing is bound until it finishes, so a 60 MB
 // wasm bundle or a 120 MB json blob would turn every start into a multi-minute
 // connection-refused window. Browsers handle a br-less response fine (they fall
 // back to gzip or identity); an unreachable port they do not.
 pub(crate) const DEF_MAX_BROTLI_BYTES: usize = 8 << 20;
 // gzip (miniz_oxide) runs at tens of MB/s, ~20-50x brotli q11, so it earns a
 // much higher ceiling: halving a large minified bundle on the wire is well
-// worth the sub-second boot cost. Only past this — where even gzip's boot cost
-// would stall startup — is a file cached identity-only.
+// worth the sub-second boot cost. Only past this, where even gzip's boot cost
+// would stall startup, is a file cached identity-only.
 pub(crate) const DEF_MAX_GZIP_BYTES: usize = 64 << 20;
 // Below this a file is stored identity-only: the headers alone outweigh any
 // saving, and a compressed form is often larger than the source.
@@ -412,12 +412,12 @@ pub(crate) const DEF_HSTS_MAX_AGE: u64 = 63_072_000;
 pub(crate) const DEF_MAX_CONNS_PER_IP: usize = 64;
 
 /// Cache and compression settings. Given at the top level they are the default
-/// for every site; a `site` block may override any of them for itself — except
+/// for every site; a `site` block may override any of them for itself, except
 /// `max_total_bytes`, which is one budget shared across every site and so is
 /// accepted at the top level only.
 ///
 /// Every field has a default, so a config that sets none of them is valid. All
-/// primitives, so `Copy` — it is threaded through the cache build by value.
+/// primitives, so `Copy`: it is threaded through the cache build by value.
 #[derive(Clone, Copy)]
 pub(crate) struct Tuning {
     pub(crate) compression: bool,
@@ -497,7 +497,7 @@ fn parse_secs(key: &str, v: &str) -> Result<u64, String> {
 
 /// A duration that will be added to an `Instant`, so it has to be bounded:
 /// `Instant + Duration` panics on overflow, and `DeadlineIo` builds one per
-/// connection — an unchecked value would panic every worker thread while the
+/// connection, and an unchecked value would panic every worker thread while the
 /// process kept reporting healthy. A day is far past any useful response
 /// deadline, so anything beyond it is a typo worth failing the load over.
 fn parse_deadline_secs(key: &str, v: &str) -> Result<u64, String> {
@@ -596,13 +596,13 @@ fn explain_site_line(v: &str) -> String {
         }
         s.push_str("    }");
     } else {
-        s.push_str(" — see server.conf.example");
+        s.push_str(". See server.conf.example");
     }
     s
 }
 
 /// The same, for a `redirect = from to cert key` line. A redirect-only host is
-/// an ordinary site block with no root and one catch-all rule — there is no
+/// an ordinary site block with no root and one catch-all rule. There is no
 /// second kind of vhost in either the config or the server.
 fn explain_redirect_line(v: &str) -> String {
     let p: Vec<&str> = v.split_whitespace().collect();
@@ -617,14 +617,14 @@ fn explain_redirect_line(v: &str) -> String {
         s.push_str(&format!("        redirect * -> https://{}$0\n", p[1]));
         s.push_str("    }");
     } else {
-        s.push_str(" — see server.conf.example");
+        s.push_str(". See server.conf.example");
     }
     s
 }
 
 /// A site block still being read: the raw values, plus its setting overrides
 /// held as `(line, key, value)` so they can be applied *after* the whole file is
-/// parsed. Deferring them is what makes the file order-independent — a top-level
+/// parsed. Deferring them is what makes the file order-independent: a top-level
 /// `csp` written below a site block is still that site's default.
 struct PendingSite {
     line: usize,
@@ -658,7 +658,7 @@ pub(crate) fn parse_config(text: &str) -> Result<Config, String> {
         // A `#` starts a comment anywhere on the line, so a rule can be annotated
         // in place. Values that legitimately contain `#` (a CSP hash source, a
         // fragment in a redirect target) would be truncated, so only a `#` that
-        // starts the line or follows whitespace counts — `url(#a)` survives.
+        // starts the line or follows whitespace counts, so `url(#a)` survives.
         let line = match raw.find('#') {
             Some(0) => "",
             Some(p) if raw.as_bytes()[p - 1].is_ascii_whitespace() => &raw[..p],
@@ -841,7 +841,7 @@ pub(crate) fn parse_config(text: &str) -> Result<Config, String> {
         let key = p
             .key
             .ok_or_else(|| at(p.line, format!("site {label}: missing 'key'")))?;
-        // No root is legitimate — that is a redirect-only host — but no root and
+        // No root is legitimate (that is a redirect-only host), but no root and
         // no rules is a site that can only ever 404, which is never intended.
         if p.root.is_none() && p.redirects.is_empty() {
             return Err(at(
@@ -1423,7 +1423,7 @@ mod tests {
     #[test]
     fn an_absurd_duration_is_rejected_rather_than_panicking_later() {
         // `Instant + Duration` panics on overflow, and DeadlineIo builds one per
-        // connection — so an unbounded value here would turn every request into a
+        // connection, so an unbounded value here would turn every request into a
         // worker-thread panic while the process kept reporting healthy.
         let e = with(&format!("max_response_secs = {}", u64::MAX)).err().unwrap();
         assert!(e.contains("at most"), "{e}");

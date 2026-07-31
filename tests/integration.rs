@@ -4,7 +4,7 @@
 //! document root, a freshly generated self-signed certificate, and OS-assigned
 //! ports, then drive it with real clients. This covers the ground the unit
 //! tests deliberately cannot reach: the accept loop, the TLS handshake, the
-//! plain-HTTP listener, and the `watch()` hot-reload loop — all over real
+//! plain-HTTP listener, and the `watch()` hot-reload loop, all over real
 //! sockets.
 //!
 //! The TLS client is `curl` (present on essentially every dev/CI box). It runs
@@ -93,7 +93,7 @@ struct TestServer {
 
 impl TestServer {
     /// Default fixture forces SSL on the site, so the plain-HTTP listener
-    /// redirects — the posture most deployments want.
+    /// redirects, the posture most deployments want.
     fn start() -> TestServer {
         TestServer::start_with(true)
     }
@@ -107,7 +107,7 @@ impl TestServer {
         TestServer::start_full(force_ssl, extra, "")
     }
 
-    /// As `start_tuned`, plus extra lines *inside* the site block — the per-site
+    /// As `start_tuned`, plus extra lines *inside* the site block, for the per-site
     /// overrides and `redirect` rules.
     fn start_site(site_extra: &str) -> TestServer {
         TestServer::start_full(true, "", site_extra)
@@ -301,7 +301,7 @@ fn render_config(
 }
 
 /// One raw plain-HTTP request over a fresh TCP connection (Connection: close so
-/// the read terminates at EOF). `None` if the port refuses the connection —
+/// the read terminates at EOF). `None` if the port refuses the connection,
 /// used to observe a listener being retired.
 fn plain_request(port: u16, raw_request: &str) -> Option<String> {
     let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
@@ -356,7 +356,7 @@ fn https_serves_index_over_real_tls() {
     assert!(r.contains("<h1>home</h1>"));
     // HTTP/1.1 default keep-alive is reflected back.
     assert_eq!(header(&r, "connection").as_deref(), Some("keep-alive"));
-    // A baked security header made it through the whole stack.
+    // A precomputed security header reached the client through the whole stack.
     assert!(header(&r, "strict-transport-security").is_some());
 }
 
@@ -432,7 +432,7 @@ fn plain_http_redirects_to_https_with_force_ssl() {
     let srv = TestServer::start();
     let r = srv.plain("GET /page?x=1 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     assert!(status_ok(&r, "301"), "{r}");
-    // Location targets the HTTPS listener's real (OS-assigned) port — see the
+    // Location targets the HTTPS listener's real (OS-assigned) port. See the
     // dir-index test above for why the port is present here but not on :443.
     assert_eq!(
         header(&r, "location").as_deref(),
@@ -537,17 +537,17 @@ fn cert_hot_reload_swaps_the_served_certificate() {
     let boot_fp = srv.fingerprint();
 
     // Drop a different (but still localhost-covering) certificate over the
-    // running PEMs — the shape of an ACME/certbot renewal.
+    // running PEMs, the shape of an ACME/certbot renewal.
     let new_cert = srv.dir.join("renewed-cert.pem");
     let new_key = srv.dir.join("renewed-key.pem");
     gen_localhost_cert(&new_cert, &new_key);
     // Key first, then cert: the watcher debounces one 2s tick, so it never sees
-    // a half-updated pair regardless of order — but this mirrors atomic deploys.
+    // a half-updated pair regardless of order, but this mirrors atomic deploys.
     std::fs::copy(&new_key, &srv.key).unwrap();
     std::fs::copy(&new_cert, &srv.cert).unwrap();
 
     // The watcher should rebuild TLS only and present the new cert within a few
-    // ticks — no restart, no content rebuild.
+    // ticks: no restart, no content rebuild.
     srv.wait_cert_changes_from(&boot_fp, Duration::from_secs(20));
 
     // And the site is still served over the new certificate.
@@ -759,7 +759,7 @@ fn per_site_settings_reach_the_served_response() {
         header(&r, "strict-transport-security").is_none(),
         "hsts_max_age = 0 must drop the header: {r}"
     );
-    // The same block covers responses the cache did not bake: a 404, a redirect.
+    // The same block covers responses the cache did not build: a 404, a redirect.
     let miss = srv.curl(&["-i"], "/missing");
     assert!(status_ok(&miss, "404"), "{miss}");
     assert_eq!(header(&miss, "content-security-policy").as_deref(), Some("default-src 'self'"));
