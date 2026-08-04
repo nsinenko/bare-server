@@ -290,7 +290,7 @@ jobs:
 
       # v1.2.3 -> :1.2.3, :1.2, :latest. No :1, because a 0.x major carries no
       # compatibility promise, and pinning to it would be misleading.
-      - uses: docker/metadata-action@v5
+      - uses: docker/metadata-action@v6
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}
