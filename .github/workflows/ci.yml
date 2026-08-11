@@ -73,7 +73,7 @@ jobs:
       # toolchain, which ring's build script needs when cross-compiling.
       # Installed prebuilt rather than `cargo install`, which would rebuild it
       # from source on every one of these matrix legs.
-      - uses: taiki-e/install-action@v2.85.3
+      - uses: taiki-e/install-action@v2.85.10
         with:
           tool: cross
       - name: Build

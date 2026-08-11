@@ -95,7 +95,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
-      - uses: taiki-e/install-action@v2.85.3
+      - uses: taiki-e/install-action@v2.85.10
         if: matrix.cross
         with:
           tool: cross
