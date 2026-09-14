@@ -33,11 +33,13 @@ The Docker build does this for you.
 The image is a `scratch` container that holds just the binary: no shell, no CA
 store, no package manager, nothing to patch but the binary itself.
 
-Prebuilt images are published to GitHub's registry for `linux/amd64` and
-`linux/arm64` on every release:
+Prebuilt images are published to Docker Hub and GitHub's registry for
+`linux/amd64` and `linux/arm64` on every release. Both carry the same
+manifests; pull whichever is closer:
 
 ```sh
-docker pull ghcr.io/nsinenko/bare-server:latest     # or :0.2.0, :0.2
+docker pull nsinenko/bare-server:latest             # or :0.2.0, :0.2
+docker pull ghcr.io/nsinenko/bare-server:latest
 ```
 
 They are assembled from the same static binaries as the release tarballs, so the
@@ -112,7 +114,7 @@ docker run -d --name bare-server --restart always \
   --user 1000:1000 \
   -v /etc/bare-server:/etc/bare-server:ro \
   -v /var/www:/var/www:ro \
-  ghcr.io/nsinenko/bare-server:latest /etc/bare-server/server.conf
+  nsinenko/bare-server:latest /etc/bare-server/server.conf
 ```
 
 Why each flag:

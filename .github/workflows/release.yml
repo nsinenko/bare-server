@@ -237,10 +237,10 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: cargo publish --locked
 
-  # Multi-arch container image on GitHub's registry. GitHub Packages has no Cargo
-  # registry, so the crate itself can only live on crates.io, but the image is
-  # worth publishing here, since the deployment guide otherwise asks every
-  # operator to build it themselves.
+  # Multi-arch container image on GitHub's and Docker's registries. GitHub
+  # Packages has no Cargo registry, so the crate itself can only live on
+  # crates.io, but the image is worth publishing here, since the deployment
+  # guide otherwise asks every operator to build it themselves.
   #
   # This assembles the image from the binaries `build` already produced rather
   # than recompiling: it keeps the container and the release tarball for a given
@@ -288,12 +288,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
+      # Docker Hub needs two repository secrets: DOCKERHUB_USERNAME is the
+      # account that owns the repository, DOCKERHUB_TOKEN a read/write access
+      # token created at hub.docker.com -> Account Settings -> Security. A
+      # token, not the account password, so it can be scoped and revoked.
+      - uses: docker/login-action@v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       # v1.2.3 -> :1.2.3, :1.2, :latest. No :1, because a 0.x major carries no
       # compatibility promise, and pinning to it would be misleading.
       - uses: docker/metadata-action@v6
         id: meta
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: |
+            ghcr.io/${{ github.repository }}
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/bare-server
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
