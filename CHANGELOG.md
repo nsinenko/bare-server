@@ -9,6 +9,25 @@ behaviour.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-14
+
+### Added
+
+- The container image is published to Docker Hub
+  (`nsinenko/bare-server`) as well as to `ghcr.io`, with the same tags
+  (`x.y.z`, `x.y`, `latest`) and the same multi-arch manifest on both.
+
+### Security
+
+- `rustls` 0.23.43 -> 0.23.45 fixes RUSTSEC-2026-0285: the TLS 1.3
+  handshake accepted messages across encryption-level boundaries. The
+  server terminates TLS, so the fix applies to every HTTPS connection.
+
+### Changed
+
+- `rustls-webpki` 0.103.13 -> 0.103.15 and `flate2` 1.1.9 -> 1.1.10,
+  routine updates pulled in by the lockfile bump.
+
 ## [0.2.0] - 2026-07-31
 
 ### Added
@@ -46,6 +65,7 @@ behaviour.
 - First public release. A static-file web server with built-in TLS
   termination, in a single static binary.
 
-[Unreleased]: https://github.com/nsinenko/bare-server/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/nsinenko/bare-server/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/nsinenko/bare-server/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/nsinenko/bare-server/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nsinenko/bare-server/releases/tag/v0.1.0
